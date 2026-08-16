@@ -12,3 +12,12 @@
 10. Every destructive operation requires separate, explicit human approval.
 11. Codex must not use `sudo` by default.
 12. Access to Production is limited to read-only verification unless separately and explicitly authorized.
+
+## Clean-room testing policy
+
+- Test processes must use `ENVIRONMENT=test`, synthetic credentials, and explicitly approved test endpoints. Production database, Redis, backend, and provider endpoints are prohibited.
+- Backend tests must be launched through `scripts/run_backend_regression_cleanroom.sh`. Its `no-external` and `integration` modes must remain separate.
+- Integration tests may use only disposable, loopback-bound PostgreSQL and Redis resources. They must never use shared resources.
+- External provider network access is denied by default. Provider behavior must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching unless a future network integration test receives separate approval.
+- `scripts/run_backend_regression_isolated.sh` is **PRODUCTION-COUPLED — DO NOT USE FOR CLEAN-ROOM DEVELOPMENT**.
+- Backend dependencies are range-bounded but not lock/hash pinned. Follow `docs/DEPENDENCY_REPRODUCIBILITY.md`; do not invent lock versions manually.

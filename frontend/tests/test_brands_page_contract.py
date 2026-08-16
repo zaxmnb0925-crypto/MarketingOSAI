@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(
-    "/opt/MarketingOSAI"
-)
+    __file__
+).resolve().parents[2]
 
 BRANDS_DIR = (
     PROJECT_ROOT

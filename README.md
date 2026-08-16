@@ -22,6 +22,20 @@ Start local configuration by copying `.env.example` to an untracked `.env`. Repl
 
 Backend tests are under `backend/tests/`; frontend contract tests are under `frontend/tests/`. Run the tests relevant to every change. Migration revisions are under `backend/alembic/versions/`; migrations require review and must not be applied automatically to Production.
 
+### Clean-room tests
+
+Use `scripts/run_backend_regression_cleanroom.sh no-external` for backend unit and contract tests after test dependencies have been installed in an isolated development environment. The runner requires `ENVIRONMENT=test`, installs nothing, uses synthetic settings, and denies non-loopback network access.
+
+The `integration` mode is separate and fail-closed. It requires explicitly supplied disposable PostgreSQL and Redis resources bound to loopback, non-default ports, a test-named database, and `MARKETINGOS_TEST_RESOURCE_SCOPE=disposable`. It does not create, migrate, reset, or destroy those resources.
+
+Provider tests must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching. Live OpenAI, Meta, and other external provider traffic is denied by default.
+
+`scripts/run_backend_regression_isolated.sh` is **PRODUCTION-COUPLED — DO NOT USE FOR CLEAN-ROOM DEVELOPMENT**. It is retained only as historical source and must not be run from this development repository.
+
+Frontend contract tests are Python source checks and do not require npm dependencies. Their paths resolve from this repository; they must not read a Production checkout.
+
+Backend runtime requirements currently use bounded ranges without a hash-pinned lock. See `docs/DEPENDENCY_REPRODUCIBILITY.md` for the reviewed locking procedure that must precede reproducible dependency installation.
+
 ## Security and deployment principles
 
 Production is a read-only verification target for normal development. Do not build directly in Production, and do not store secrets, backups, database dumps, runtime data, or private keys in Git. Production releases must be identified by immutable image digests; mutable tags such as `latest` are not valid release identities. Destructive operations and Production migrations require explicit human approval.
