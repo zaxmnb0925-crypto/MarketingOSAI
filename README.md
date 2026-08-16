@@ -30,6 +30,8 @@ Batch `integration` mode is disabled. Future integration execution must use `scr
 
 Sentinels must be secret-free, mode `0600`, stored under a run-scoped mode-`0700` directory outside the repository, and match exact process/container identity, immutable digest, labels, listener, port, start time, and temporary path. Test data is derived from the attested run ID; shared PostgreSQL/Redis, `FLUSHALL`, broad cleanup, and unscoped fixture selection are prohibited. Alembic may target only source head `7c91e2f4b6a8` after a separate migration gate. See `docs/INTEGRATION_RESOURCE_SAFETY.md`. These controls have not yet created or verified resources or run integration tests.
 
+Lifecycle CLIs are statically verified and default to dry-run. They accept only digest-pinned images, build sanitized Docker argv lists, validate supplied observation fixtures, authorize the exact migration target, and authorize teardown by exact container ID and cleanup path. Their execute modes remain disabled; Docker execution, resource provisioning, migration, and integration tests require separate approval.
+
 Provider tests must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching. Live OpenAI, Meta, and other external provider traffic is denied by default.
 
 `scripts/run_backend_regression_isolated.sh` is **PRODUCTION-COUPLED — DO NOT USE FOR CLEAN-ROOM DEVELOPMENT**. It is retained only as historical source and must not be run from this development repository.

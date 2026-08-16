@@ -41,6 +41,10 @@ def evidence(tmp_path: Path, kind: str):
     observed = dict(common)
     observed.update({
         "listener_host": "127.0.0.1", "listener_port": common["resource_port"],
+        "container_name": f"marketingos-{RUN_ID}-{kind}", "running": True,
+        "internal_port": 5432 if kind == "postgres" else 6379,
+        "mount_sources": [str(resource_dir)] if kind == "postgres" else [],
+        "networks": ["bridge"],
         "docker_labels": {
             DOCKER_LABELS["test"]: "true", DOCKER_LABELS["run"]: RUN_ID,
             DOCKER_LABELS["type"]: kind,

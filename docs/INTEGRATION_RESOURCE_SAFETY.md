@@ -19,3 +19,11 @@ The first integration entry point accepts exactly one of:
 - `backend/tests/test_publication_publish_normal_mode_integration.py` (PostgreSQL and Redis)
 
 Test fixture identities are derived from `TEST_RUN_ID`; publish tests select only their exact run-owned social account. Redis confirmation and activation keys are tracked and deleted individually, while teardown of the dedicated Redis resource remains the final isolation boundary. This policy documents safety tooling only: no disposable Docker resource, migration, or integration execution has yet been verified.
+
+## Lifecycle tooling status
+
+The provision, observation, migration, and teardown CLIs are default-dry-run and statically verified. Image references must use `repository@sha256:<64 lowercase hex>`; tag-only references are rejected. Docker specifications use argv lists, explicit loopback publishing, required ownership labels, bridge networking, and no Production mount or network. PostgreSQL passwords remain runtime-only and never enter sentinel JSON or sanitized plans.
+
+Supplied Docker observations must attest the exact container ID, digest, labels, derived name, running state, host/internal ports, start time, mounts, and bridge network. Migration authorization reconstructs the target in memory and fixes the source head at `7c91e2f4b6a8`. Teardown authorization produces commands only for the exact attested container ID and validates the exact run/resource cleanup directory. Any mismatch reports no authorization and preserves the resource.
+
+The only permitted lifecycle order is provision → observe → attest → migrate PostgreSQL → one exact allowlisted integration file → verify → exact teardown. Actual Docker execution, resource creation, Alembic execution, and integration tests remain unapproved and have not occurred.

@@ -28,7 +28,8 @@ SENTINEL_KEYS = {
     "database_user", "redis_db", "start_time",
 }
 OBSERVATION_KEYS = SENTINEL_KEYS | {
-    "listener_host", "listener_port", "docker_labels",
+    "listener_host", "listener_port", "docker_labels", "container_name",
+    "running", "internal_port", "mount_sources", "networks",
 }
 
 
@@ -162,6 +163,20 @@ def validate_runtime_observation(attestation: ResourceAttestation,
         _fail("runtime identity differs from sentinel")
     if data["listener_host"] != "127.0.0.1" or data["listener_port"] != attestation.resource_port:
         _fail("listener identity mismatch")
+    expected_name = f"marketingos-{attestation.resource_run_id}-{attestation.resource_type}"
+    if data["container_name"] != expected_name or data["running"] is not True:
+        _fail("container name/state mismatch")
+    expected_internal_port = 5432 if attestation.resource_type == "postgres" else 6379
+    if data["internal_port"] != expected_internal_port:
+        _fail("container internal port mismatch")
+    mounts = data["mount_sources"]
+    if attestation.resource_type == "postgres":
+        if mounts != [str(attestation.resource_temp_dir)]:
+            _fail("PostgreSQL mount identity mismatch")
+    elif mounts != []:
+        _fail("Redis must not use host mounts")
+    if data["networks"] != ["bridge"]:
+        _fail("Docker network identity mismatch")
     labels = data["docker_labels"]
     if attestation.resource_container_id is not None:
         expected = {DOCKER_LABELS["test"]: "true", DOCKER_LABELS["run"]: attestation.resource_run_id,
