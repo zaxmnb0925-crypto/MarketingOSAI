@@ -1,0 +1,26 @@
+ARG BASE_IMAGE
+
+FROM ${BASE_IMAGE}
+
+USER root
+
+COPY requirements-test.txt /tmp/requirements-test.txt
+
+RUN pip install \
+        --no-cache-dir \
+        -r /tmp/requirements-test.txt \
+    && rm -f /tmp/requirements-test.txt
+
+COPY pytest.ini /app/pytest.ini
+COPY tests /app/tests
+
+RUN chown -R \
+        appuser:appgroup \
+        /app/pytest.ini \
+        /app/tests
+
+USER appuser
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app:/app/tests

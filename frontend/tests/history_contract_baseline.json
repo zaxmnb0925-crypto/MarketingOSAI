@@ -1,0 +1,102 @@
+{
+  "class_literals": [
+    "brand-mark small",
+    "dashboard-error",
+    "dashboard-header",
+    "dashboard-loading",
+    "dashboard-main",
+    "dashboard-shell",
+    "eyebrow",
+    "history-actions",
+    "history-badges",
+    "history-card",
+    "history-card-top",
+    "history-date",
+    "history-draft-box",
+    "history-empty",
+    "history-empty",
+    "history-error-box",
+    "history-list",
+    "history-meta-grid",
+    "history-platform",
+    "history-summary-grid",
+    "history-toolbar",
+    "history-warning-box",
+    "logout-button",
+    "nav-item",
+    "nav-item",
+    "nav-item",
+    "nav-item active",
+    "nav-item disabled",
+    "secondary-button",
+    "secondary-button",
+    "sidebar",
+    "sidebar-brand",
+    "sidebar-nav"
+  ],
+  "class_name_count": 35,
+  "client_component": true,
+  "fetch_count": 4,
+  "fetch_literals": [
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/workspaces/${currentWorkspace.id}/brands",
+    "/api/workspaces/${workspaceId}/brands/${brandId}/content"
+  ],
+  "forbidden_auth_storage_tokens": [
+    "Authorization",
+    "Bearer ",
+    "localStorage",
+    "sessionStorage",
+    "access_token",
+    "refresh_token"
+  ],
+  "h1_text": [
+    "內容歷史"
+  ],
+  "jsx_counts": {
+    "article": 6,
+    "button": 3,
+    "dialog": 0,
+    "form": 0,
+    "h1": 1,
+    "h2": 1,
+    "input": 0,
+    "section": 4,
+    "select": 3,
+    "table": 0,
+    "textarea": 0
+  },
+  "original_page": "frontend/app/history/page.tsx",
+  "original_page_lines": 790,
+  "original_page_sha256": "9ffaaeb07eeb5fdd17b46cdc6be1bdb7720194fd077bbac604805d3c98944b71",
+  "required_functions": [
+    "HistoryPage",
+    "boot",
+    "changeBrand",
+    "copyContent",
+    "formatDate",
+    "loadHistory",
+    "logout",
+    "platformLabel",
+    "statusLabel"
+  ],
+  "required_state_variables": [
+    "brands",
+    "error",
+    "historyLoading",
+    "items",
+    "loading",
+    "statusFilter",
+    "workspace"
+  ],
+  "required_type_aliases": [
+    "Brand",
+    "ContentItem",
+    "MeResponse",
+    "Workspace"
+  ],
+  "route": "/history",
+  "router_push_literals": [],
+  "schema_version": 1
+}

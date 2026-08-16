@@ -1,0 +1,94 @@
+{
+  "brand_fields": [
+    "brand_guidelines",
+    "brand_voice",
+    "country",
+    "default_cta",
+    "description",
+    "forbidden_words",
+    "id",
+    "industry",
+    "keywords",
+    "language",
+    "name",
+    "products_services",
+    "target_audience",
+    "tone",
+    "value_proposition",
+    "website"
+  ],
+  "client_api_refs": [
+    "/api/auth/me",
+    "/api/workspaces/${targetWorkspaceId}/brands",
+    "/api/workspaces/${workspaceId}/brands",
+    "/api/workspaces/${workspaceId}/brands/${selectedId}"
+  ],
+  "form_fields": [
+    "brand_guidelines",
+    "brand_voice",
+    "country",
+    "default_cta",
+    "description",
+    "forbidden_words",
+    "industry",
+    "keywords",
+    "language",
+    "name",
+    "products_services",
+    "target_audience",
+    "tone",
+    "value_proposition",
+    "website"
+  ],
+  "http_method_literals": {
+    "DELETE": 1,
+    "PATCH": 1,
+    "POST": 1
+  },
+  "item_bff_methods": [
+    "DELETE",
+    "GET",
+    "PATCH"
+  ],
+  "list_bff_methods": [
+    "GET",
+    "POST"
+  ],
+  "pre_refactor_inventory": {
+    "fetch_count": 4,
+    "router_call_count": 3,
+    "source_file_count": 1,
+    "source_files": [
+      "page.tsx"
+    ],
+    "use_state_count": 7
+  },
+  "required_behavior_tokens": [
+    "brandToForm",
+    "loadBrands",
+    "startCreate",
+    "startEdit",
+    "saveBrand",
+    "deleteBrand"
+  ],
+  "required_state_surface_tokens": [
+    "workspaceId",
+    "brands",
+    "selectedId",
+    "form",
+    "loading",
+    "saving",
+    "message"
+  ],
+  "route": "brands",
+  "router_methods": {
+    "push": 1,
+    "replace": 2
+  },
+  "router_path_tokens": [
+    "/api/auth/me",
+    "/dashboard",
+    "/login"
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,4 @@
+services:
+  frontend:
+    image: marketingos-frontend:v015-beta-rc1
+    pull_policy: never

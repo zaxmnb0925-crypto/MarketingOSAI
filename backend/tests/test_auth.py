@@ -1,0 +1,66 @@
+import inspect
+
+import pytest
+from pydantic import ValidationError
+
+from app.api import auth
+from app.schemas.auth import (
+    RegisterRequest,
+    TokenResponse,
+)
+
+
+def test_normalize_email_is_case_and_space_stable():
+    assert (
+        auth.normalize_email(
+            "  Owner@Example.COM "
+        )
+        == "owner@example.com"
+    )
+
+
+def test_slugify_produces_stable_workspace_slug():
+    value = auth.slugify(
+        " Alpha Coffee "
+    )
+
+    assert value
+    assert value == value.lower()
+    assert " " not in value
+    assert "alpha" in value
+    assert "coffee" in value
+
+
+def test_registration_schema_enforces_password_floor():
+    with pytest.raises(
+        ValidationError
+    ):
+        RegisterRequest(
+            email="owner@example.com",
+            password="short",
+            full_name="Owner",
+            workspace_name="Alpha",
+        )
+
+
+def test_registration_contract_creates_workspace_membership():
+    source = inspect.getsource(
+        auth.register
+    )
+
+    assert "Workspace(" in source
+    assert "Membership(" in source
+    assert "workspace_id" in source
+    assert "MembershipRole." in source
+
+
+def test_token_response_contract_contains_both_tokens():
+    response = TokenResponse(
+        access_token="access",
+        refresh_token="refresh",
+        expires_in=3600,
+    )
+
+    assert response.access_token == "access"
+    assert response.refresh_token == "refresh"
+    assert response.token_type == "bearer"
