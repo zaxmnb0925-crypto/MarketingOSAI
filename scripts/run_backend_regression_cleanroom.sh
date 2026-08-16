@@ -25,12 +25,8 @@ case "$MODE" in
         export REDIS_URL="redis://127.0.0.1:1/15"
         ;;
     integration)
-        export ENVIRONMENT=test
-        export MARKETINGOS_TEST_MODE=integration
-
-        : "${DATABASE_URL:?integration DATABASE_URL is required}"
-        : "${REDIS_URL:?integration REDIS_URL is required}"
-        : "${MARKETINGOS_TEST_RESOURCE_SCOPE:?integration resource scope is required}"
+        echo "STOP: batch integration is disabled; use the exact-file clean-room integration runner" >&2
+        exit 2
         ;;
     *)
         echo "usage: $0 {no-external|integration}" >&2
@@ -59,13 +55,6 @@ COMMON_ARGS=(
     -p _test_isolation_plugin
     -p _v013h_legacy_target_compat
 )
-
-if [ "$MODE" = "integration" ]; then
-    exec python3 "${COMMON_ARGS[@]}" \
-        tests/test_publication_reconciliation_postgres_integration.py \
-        tests/test_publication_publish_http_integration.py \
-        tests/test_publication_publish_normal_mode_integration.py
-fi
 
 mapfile -t TEST_FILES < <(
     find tests \

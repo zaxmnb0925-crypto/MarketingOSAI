@@ -31,6 +31,7 @@ from _publication_test_compat import (
     publication_source_text,
     publications,
 )
+from _integration_run_identity import integration_token, integration_uuid
 import app.services.publication_executor as executor
 
 from app.core.database import get_db
@@ -69,6 +70,13 @@ MESSAGES = (
     "v0.13E-D-B HTTP mock rejection",
     "v0.13E-D-B HTTP mock unknown",
 )
+
+
+RUN_USER_ID = integration_uuid("publish-http-user")
+RUN_WORKSPACE_ID = integration_uuid("publish-http-workspace")
+RUN_MEMBERSHIP_ID = integration_uuid("publish-http-membership")
+RUN_SOCIAL_ACCOUNT_ID = integration_uuid("publish-http-social-account")
+RUN_PROVIDER_ID = integration_token("publish-http-page")
 
 
 @asynccontextmanager
@@ -268,6 +276,9 @@ async def main():
                     User.is_active.is_(
                         True
                     ),
+                    SocialAccount.id == RUN_SOCIAL_ACCOUNT_ID,
+                    SocialAccount.workspace_id == RUN_WORKSPACE_ID,
+                    SocialAccount.platform_account_id == RUN_PROVIDER_ID,
                 )
                 .limit(1)
             )
@@ -2268,12 +2279,12 @@ def test_v014_synthetic_identity_main_equivalence():
     from app.models.workspace import Workspace
 
     async def run():
-        user_id = uuid4()
-        workspace_id = uuid4()
-        membership_id = uuid4()
-        social_account_id = uuid4()
+        user_id = RUN_USER_ID
+        workspace_id = RUN_WORKSPACE_ID
+        membership_id = RUN_MEMBERSHIP_ID
+        social_account_id = RUN_SOCIAL_ACCOUNT_ID
 
-        unique = uuid4().hex
+        unique = integration_token("publish-http-fixture")
 
         plaintext_token = (
             "v014-disposable-synthetic-token-"
@@ -2345,10 +2356,7 @@ def test_v014_synthetic_identity_main_equivalence():
             workspace_id=workspace_id,
             platform=SocialPlatform.facebook,
             status=SocialAccountStatus.connected,
-            platform_account_id=(
-                "v014-page-"
-                + unique
-            ),
+            platform_account_id=RUN_PROVIDER_ID,
             account_name=(
                 "v014 synthetic page "
                 + unique

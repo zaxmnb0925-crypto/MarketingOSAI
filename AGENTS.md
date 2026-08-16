@@ -16,8 +16,10 @@
 ## Clean-room testing policy
 
 - Test processes must use `ENVIRONMENT=test`, synthetic credentials, and explicitly approved test endpoints. Production database, Redis, backend, and provider endpoints are prohibited.
-- Backend tests must be launched through `scripts/run_backend_regression_cleanroom.sh`. Its `no-external` and `integration` modes must remain separate.
-- Integration tests may use only disposable, loopback-bound PostgreSQL and Redis resources. They must never use shared resources.
+- No-external backend tests use `scripts/run_backend_regression_cleanroom.sh no-external`. Batch integration mode must remain disabled.
+- Integration tests run one exact allowlisted file at a time through `scripts/run_backend_integration_cleanroom.sh`, only after sentinel and fresh runtime-observation attestation passes.
+- Integration resources must be disposable, loopback-bound, digest-pinned, run-scoped, and exclusively owned. Shared PostgreSQL/Redis, inherited resource URLs, `FLUSHALL`, `FLUSHDB`, broad process killing, pruning, or wildcard cleanup are prohibited.
+- Resource sentinels must remain outside Git, contain no secrets, and match run ID, exact PID/container ID, labels, digest, listener, port, start time, and temporary path before migration, tests, or cleanup. Identity mismatch fails closed and preserves the resource.
 - External provider network access is denied by default. Provider behavior must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching unless a future network integration test receives separate approval.
 - `scripts/run_backend_regression_isolated.sh` is **PRODUCTION-COUPLED — DO NOT USE FOR CLEAN-ROOM DEVELOPMENT**.
-- Backend dependencies are range-bounded but not lock/hash pinned. Follow `docs/DEPENDENCY_REPRODUCIBILITY.md`; do not invent lock versions manually.
+- Backend range inputs and committed hash-pinned lock candidates are documented in `docs/DEPENDENCY_REPRODUCIBILITY.md`; verified installs must retain `--require-hashes`.

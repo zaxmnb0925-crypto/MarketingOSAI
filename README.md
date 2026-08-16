@@ -26,7 +26,9 @@ Backend tests are under `backend/tests/`; frontend contract tests are under `fro
 
 Use `scripts/run_backend_regression_cleanroom.sh no-external` for backend unit and contract tests after test dependencies have been installed in an isolated development environment. The runner requires `ENVIRONMENT=test`, installs nothing, uses synthetic settings, and denies non-loopback network access.
 
-The `integration` mode is separate and fail-closed. It requires explicitly supplied disposable PostgreSQL and Redis resources bound to loopback, non-default ports, a test-named database, and `MARKETINGOS_TEST_RESOURCE_SCOPE=disposable`. It does not create, migrate, reset, or destroy those resources.
+Batch `integration` mode is disabled. Future integration execution must use `scripts/run_backend_integration_cleanroom.sh` with exactly one allowlisted test file. Before pytest, the runner requires matching external sentinels and fresh runtime observations for disposable, loopback-only resources, then reconstructs database and Redis URLs in process memory. Arbitrary inherited resource URLs are discarded.
+
+Sentinels must be secret-free, mode `0600`, stored under a run-scoped mode-`0700` directory outside the repository, and match exact process/container identity, immutable digest, labels, listener, port, start time, and temporary path. Test data is derived from the attested run ID; shared PostgreSQL/Redis, `FLUSHALL`, broad cleanup, and unscoped fixture selection are prohibited. Alembic may target only source head `7c91e2f4b6a8` after a separate migration gate. See `docs/INTEGRATION_RESOURCE_SAFETY.md`. These controls have not yet created or verified resources or run integration tests.
 
 Provider tests must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching. Live OpenAI, Meta, and other external provider traffic is denied by default.
 

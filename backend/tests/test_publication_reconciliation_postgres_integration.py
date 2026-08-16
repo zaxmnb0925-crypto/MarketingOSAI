@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import os
-from uuid import UUID
+from _integration_run_identity import integration_token, integration_uuid
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import (
@@ -25,21 +25,11 @@ from app.services.publication_workflow import (
 )
 
 
-WORKSPACE_ID = UUID(
-    "91000000-0000-4000-8000-000000000001"
-)
-
-USER_ID = UUID(
-    "91000000-0000-4000-8000-000000000002"
-)
-
-PUBLICATION_ID = UUID(
-    "91000000-0000-4000-8000-000000000003"
-)
-
-ROLLBACK_PUBLICATION_ID = UUID(
-    "91000000-0000-4000-8000-000000000004"
-)
+WORKSPACE_ID = integration_uuid("reconciliation-workspace")
+USER_ID = integration_uuid("reconciliation-user")
+PUBLICATION_ID = integration_uuid("reconciliation-publication")
+ROLLBACK_PUBLICATION_ID = integration_uuid("reconciliation-rollback-publication")
+RUN_TOKEN = integration_token("reconciliation")
 
 CONTENT = "v0.13G real PostgreSQL reconciliation integration"
 
@@ -98,7 +88,7 @@ async def setup_fixture():
                 )
                 VALUES (
                     :user_id,
-                    'v013g-pg-integration@example.invalid',
+                    :email,
                     true,
                     now()
                 )
@@ -106,6 +96,7 @@ async def setup_fixture():
             ),
             {
                 "user_id": USER_ID,
+                "email": RUN_TOKEN + "@example.invalid",
             },
         )
 
@@ -120,14 +111,16 @@ async def setup_fixture():
                 )
                 VALUES (
                     :workspace_id,
-                    'v013g-pg-integration',
-                    'v013g-pg-integration',
+                    :workspace_name,
+                    :workspace_slug,
                     now()
                 )
                 """
             ),
             {
                 "workspace_id": WORKSPACE_ID,
+                "workspace_name": RUN_TOKEN,
+                "workspace_slug": RUN_TOKEN,
             },
         )
 
