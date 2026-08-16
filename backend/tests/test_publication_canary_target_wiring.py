@@ -45,6 +45,12 @@ USER_ID = uuid.uuid4()
 
 CONTENT_HASH = "a" * 64
 
+BACKEND_ROOT = Path(
+    __file__
+).resolve().parents[1]
+
+APP_ROOT = BACKEND_ROOT / "app"
+
 
 def call_name(node):
     if not isinstance(node, ast.Call):
@@ -126,9 +132,10 @@ def setting_if_line(fn, name):
 def static_gate():
     api = publication_publishing_source_path()
 
-    exec_path = Path(
-        "/app/app/services/"
-        "publication_activation_execution.py"
+    exec_path = (
+        APP_ROOT
+        / "services"
+        / "publication_activation_execution.py"
     )
 
     activation = get_function(
@@ -229,7 +236,7 @@ def static_gate():
 
     total = 0
 
-    for path in Path("/app/app").rglob("*.py"):
+    for path in APP_ROOT.rglob("*.py"):
         tree = ast.parse(
             path.read_text(),
             filename=str(path),

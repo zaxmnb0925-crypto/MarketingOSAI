@@ -34,7 +34,7 @@ Provider tests must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or 
 
 Frontend contract tests are Python source checks and do not require npm dependencies. Their paths resolve from this repository; they must not read a Production checkout.
 
-Backend runtime requirements currently use bounded ranges without a hash-pinned lock. See `docs/DEPENDENCY_REPRODUCIBILITY.md` for the reviewed locking procedure that must precede reproducible dependency installation.
+Backend range inputs remain authoritative. Exact hash-pinned runtime and test lock candidates are stored in `backend/requirements.lock` and `backend/requirements-test.lock`. Install verification must retain `--require-hashes`; see `docs/DEPENDENCY_REPRODUCIBILITY.md` for regeneration and review policy.
 
 ## Security and deployment principles
 

@@ -2,7 +2,9 @@
 
 ## Current state
 
-Backend runtime dependencies in `backend/requirements.txt` use bounded version ranges. Test runner dependencies in `backend/requirements-test.txt` are exact, but their transitive dependencies are not locked. The repository does not currently contain a complete backend lockfile with hashes, so a backend installation is not reproducible from repository content alone.
+Backend runtime dependencies in `backend/requirements.txt` use bounded version ranges, while direct test runner dependencies in `backend/requirements-test.txt` are exact. These two files remain the authoritative resolver inputs.
+
+Python 3.12 lock candidates are stored in `backend/requirements.lock` and `backend/requirements-test.lock`. They contain exact transitive versions and artifact hashes, omit index configuration, and were generated with pip-tools 7.6.0 using its backtracking resolver. The test lock derives from both authoritative inputs and is verified in a second clean environment with pip `--require-hashes`.
 
 The frontend uses npm lockfile version 3. `frontend/package.json` and the root package metadata in `frontend/package-lock.json` agree. `npm ci` is the intended clean installation mechanism when dependency installation is separately authorized.
 
