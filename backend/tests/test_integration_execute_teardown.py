@@ -74,7 +74,7 @@ def evidence(tmp_path):
 def test_start_failure_runs_provisional_exact_id_rollback(tmp_path):
     value = spec(tmp_path); fake = Fake(value, start_fails=True)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(value, executor=fake, runtime_password="runtime-only",
+        provision_resource(value, executor=fake,
                            approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.START_FAILED
     assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)
@@ -90,7 +90,7 @@ def test_sentinel_write_failure_triggers_exact_rollback(tmp_path, monkeypatch):
         return real_write(*args, **kwargs)
     monkeypatch.setattr(flows, "write_secure_json", fail_second)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(value, executor=fake, runtime_password="runtime-only",
+        provision_resource(value, executor=fake,
                            approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.SENTINEL_WRITE_FAILED
     assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)

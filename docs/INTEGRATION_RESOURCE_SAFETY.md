@@ -22,7 +22,7 @@ Test fixture identities are derived from `TEST_RUN_ID`; publish tests select onl
 
 ## Lifecycle tooling status
 
-The provision, observation, migration, and teardown CLIs are default-dry-run and statically verified. Image references must use `repository@sha256:<64 lowercase hex>`; tag-only references are rejected. Docker specifications use argv lists, explicit loopback publishing, required ownership labels, bridge networking, and no Production mount or network. PostgreSQL passwords remain runtime-only and never enter sentinel JSON or sanitized plans.
+The provision, observation, migration, and teardown CLIs are default-dry-run and statically verified. Image references must use `repository@sha256:<64 lowercase hex>`; tag-only references are rejected. Docker specifications use argv lists, explicit loopback publishing, required ownership labels, bridge networking, and no Production mount or network. PostgreSQL provisioning generates a 256-bit synthetic secret inside the execute process. External PostgreSQL secret variables are rejected; the generated value exists only in the fixed Docker child environment and never enters argv, sentinel JSON, diagnostics, or sanitized plans.
 
 Supplied Docker observations must attest the exact container ID, digest, labels, derived name, running state, host/internal ports, start time, mounts, and bridge network. Migration authorization reconstructs the target in memory and fixes the source head at `7c91e2f4b6a8`. Teardown authorization produces commands only for the exact attested container ID and validates the exact run/resource cleanup directory. Any mismatch reports no authorization and preserves the resource.
 
@@ -30,7 +30,7 @@ The only permitted lifecycle order is provision → observe → attest → migra
 
 ## B5F execute-mode status
 
-IMPLEMENTED_AND_STATICALLY_VERIFIED: execution is injectable and argv-only; Docker inventory and inspect collectors request restricted identity fields; listener checks use `ss` and `lsof`; provision separates create from exact-ID start; provisional rollback re-observes ownership; sentinels use same-directory mode-0600 temporary files, fsync, and atomic rename after attestation; migration uses an allowlisted child environment; teardown requires fresh exact-ID observation, container-absence and port-close verification, and exact-path cleanup. Execute mode cannot use an arbitrary observation JSON file.
+IMPLEMENTED_AND_STATICALLY_VERIFIED: execution is injectable and argv-only; Docker inventory uses stopped-inclusive, no-truncation collection with only fixed ID, name, and three ownership-label fields; inspect collectors request restricted identity fields; listener checks use `ss` and `lsof`; provision separates create from exact-ID start; provisional rollback re-observes ownership; sentinels use same-directory mode-0600 temporary files, fsync, and atomic rename after attestation; migration uses an allowlisted child environment; teardown requires fresh exact-ID observation, container-absence and port-close verification, and exact-path cleanup. Execute mode cannot use an arbitrary observation JSON file.
 
 RUNTIME_NOT_YET_VERIFIED: no Docker daemon, image, PostgreSQL, Redis, Alembic migration, or integration test was used during B5F. Every real execution remains separately authorized.
 
@@ -38,3 +38,7 @@ B5E candidate inputs were resolved on 2026-08-16 for linux/amd64 and have not be
 
 - `docker.io/library/postgres@sha256:075f7ba66bc9b3ce7d6b8b635208ff61cd7cf1a67d71ec530eec5d7ae0cbe571`
 - `docker.io/library/redis@sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf`
+
+## Operator manifest invalidation
+
+Operator lifecycle manifests are single-source-state review artifacts. Any HEAD, tree, working-tree, or participating source-hash mismatch makes the manifest `STALE_DO_NOT_EXECUTE`; it must not be updated in place or executed. The B5I manifest for run `r22-0a185d9a8efd9241` became stale when B5J lifecycle sources changed and must be regenerated only in a separately approved round.

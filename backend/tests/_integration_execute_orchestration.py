@@ -10,6 +10,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,8 @@ class FailureClass(str, Enum):
     ROLLBACK_AUTHORIZATION_FAILED = "ROLLBACK_AUTHORIZATION_FAILED"
     ROLLBACK_EXECUTION_FAILED = "ROLLBACK_EXECUTION_FAILED"
     INVENTORY_COLLISION = "INVENTORY_COLLISION"
+    EXTERNAL_POSTGRES_SECRET_FORBIDDEN = "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
+    SECRET_GENERATION_FAILED = "SECRET_GENERATION_FAILED"
     MIGRATION_AUTHORIZATION_FAILED = "MIGRATION_AUTHORIZATION_FAILED"
     MIGRATION_EXECUTION_FAILED = "MIGRATION_EXECUTION_FAILED"
     TEARDOWN_AUTHORIZATION_FAILED = "TEARDOWN_AUTHORIZATION_FAILED"
@@ -97,9 +100,9 @@ class SubprocessCommandExecutor:
 class InventoryItem:
     container_id: str
     name: str
-    labels: Mapping[str, str]
-    networks: tuple[str, ...]
-    image: str = ""
+    test_resource: str
+    run_id: str
+    resource_type: str
 
 
 @dataclass(frozen=True)
@@ -115,31 +118,41 @@ def _child_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def collect_inventory(executor: CommandExecutor) -> tuple[InventoryItem, ...]:
-    result = executor.run((DOCKER, "ps", "-a", "--no-trunc", "--format", "{{json .}}"), env=_child_env())
+    inventory_format = "\t".join((
+        "{{.ID}}",
+        "{{.Names}}",
+        '{{.Label "com.marketingos.test-resource"}}',
+        '{{.Label "com.marketingos.test-run-id"}}',
+        '{{.Label "com.marketingos.test-resource-type"}}',
+    ))
+    result = executor.run(
+        (DOCKER, "ps", "-a", "--no-trunc", "--format", inventory_format),
+        env=_child_env(),
+    )
     items = []
-    try:
-        for line in filter(str.strip, result.stdout.splitlines()):
-            raw = json.loads(line)
-            labels = {}
-            for entry in filter(None, str(raw.get("Labels", "")).split(",")):
-                key, _, value = entry.partition("=")
-                labels[key] = value
-            items.append(InventoryItem(
-                str(raw["ID"]), str(raw["Names"]), labels,
-                tuple(filter(None, str(raw.get("Networks", "")).split(","))),
-                str(raw.get("Image", "")),
-            ))
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED) from None
+    if not result.stdout:
+        return ()
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 5:
+            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED)
+        container_id, name, test_resource, run_id, resource_type = fields
+        if (not CONTAINER_ID_PATTERN.fullmatch(container_id) or
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", name) or
+                any(not re.fullmatch(r"[A-Za-z0-9_.:-]{0,128}", value)
+                    for value in (test_resource, run_id, resource_type))):
+            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED)
+        items.append(InventoryItem(
+            container_id, name, test_resource, run_id, resource_type,
+        ))
     return tuple(items)
 
 
 def reject_inventory_collision(items: Sequence[InventoryItem], spec: DockerResourceSpec) -> None:
     for item in items:
-        if not isinstance(item.name, str) or not isinstance(item.labels, Mapping):
+        if not isinstance(item.name, str) or not isinstance(item.run_id, str):
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
-        if (item.name == spec.container_name or
-                item.labels.get("com.marketingos.test-run-id") == spec.run_id):
+        if item.name == spec.container_name or item.run_id == spec.run_id:
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
 
 

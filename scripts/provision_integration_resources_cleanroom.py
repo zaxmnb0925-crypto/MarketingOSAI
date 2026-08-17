@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -32,7 +31,6 @@ def main() -> int:
     if args.execute:
         result = provision_resource(
             spec, executor=SubprocessCommandExecutor(),
-            runtime_password=os.environ.get("POSTGRES_TEST_PASSWORD", ""),
         )
         print(json.dumps({"mode": "EXECUTE", **result}, sort_keys=True))
         return 0

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import secrets
 import shutil
 import sys
+from typing import Callable
 
 from _integration_execute_orchestration import (
     CommandExecutor, FailureClass, OrchestrationError, DOCKER, _child_env,
@@ -24,22 +26,35 @@ from _integration_resource_lifecycle import (
 
 
 def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
-                       runtime_password: str = "",
-                       approved_root: Path = APPROVED_TEMP_ROOT) -> dict[str, object]:
+                       approved_root: Path = APPROVED_TEMP_ROOT,
+                       secret_factory: Callable[[], str] | None = None
+                       ) -> dict[str, object]:
     states = ["PRECHECK"]
+    if spec.resource_type == "postgres" and any(
+            name in os.environ for name in ("POSTGRES_TEST_PASSWORD", "POSTGRES_PASSWORD")):
+        raise OrchestrationError(FailureClass.EXTERNAL_POSTGRES_SECRET_FORBIDDEN)
     reject_inventory_collision(collect_inventory(executor), spec)
     create_resource_directories(spec.run_id, spec.resource_type, approved_root)
     states.append("TEMP_ROOT_CREATED")
     require_port_free(observe_listener(executor, spec.port)); states.append("PRE_PORT_FREE")
-    extra = {}
+    child_environment = _child_env()
+    generated_secret = ""
     if spec.resource_type == "postgres":
-        if not runtime_password:
-            raise OrchestrationError(FailureClass.CREATE_FAILED)
-        extra["POSTGRES_PASSWORD"] = runtime_password
+        try:
+            generated_secret = (secret_factory or (lambda: secrets.token_urlsafe(32)))()
+        except Exception:
+            raise OrchestrationError(FailureClass.SECRET_GENERATION_FAILED) from None
+        if (not isinstance(generated_secret, str) or len(generated_secret) < 43 or
+                not generated_secret.isascii()):
+            raise OrchestrationError(FailureClass.SECRET_GENERATION_FAILED)
+        child_environment = _child_env({"POSTGRES_PASSWORD": generated_secret})
     try:
-        created = executor.run(spec.argv, env=_child_env(extra))
+        created = executor.run(spec.argv, env=child_environment)
     except Exception:
         raise OrchestrationError(FailureClass.CREATE_FAILED) from None
+    finally:
+        child_environment.pop("POSTGRES_PASSWORD", None)
+        generated_secret = ""
     container_id = created.stdout.strip()
     if not CONTAINER_ID_PATTERN.fullmatch(container_id):
         raise OrchestrationError(FailureClass.CREATE_FAILED)

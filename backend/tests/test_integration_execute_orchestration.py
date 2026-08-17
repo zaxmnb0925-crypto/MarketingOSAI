@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import runpy
+import sys
 
 import pytest
 
+import _integration_execute_flows as flows
 from _integration_execute_flows import (
     assert_same_run_resources, build_migration_execution, provision_resource,
     remove_exact_temp_path,
@@ -27,6 +30,7 @@ RUN_ID = "r22-0123456789abcdef"
 PG_IMAGE = "docker.io/library/postgres@sha256:" + "a" * 64
 REDIS_IMAGE = "docker.io/library/redis@sha256:" + "b" * 64
 CID = "c" * 64
+SYNTHETIC_SECRET = "S" * 43
 
 
 class FakeExecutor:
@@ -35,7 +39,10 @@ class FakeExecutor:
         self.calls = []
 
     def run(self, argv, **kwargs):
-        self.calls.append((tuple(argv), kwargs))
+        recorded = dict(kwargs)
+        if "env" in recorded:
+            recorded["env"] = dict(recorded["env"])
+        self.calls.append((tuple(argv), recorded))
         return self.handler(tuple(argv), kwargs, len(self.calls))
 
 
@@ -110,45 +117,77 @@ def test_raw_environment_cannot_be_added_to_restricted_output(tmp_path):
                                             '\n{"Env":["PASSWORD=redacted"]}', pg_spec(tmp_path))
 
 
-def test_inventory_parser_keeps_only_identity_fields():
-    raw = json.dumps({"ID": CID, "Names": "safe", "Labels": "a=b", "Networks": "bridge",
-                      "Status": "ignored", "Ports": "ignored"})
-    items = collect_inventory(FakeExecutor(lambda *_: CommandResult(0, raw)))
-    assert items == (InventoryItem(CID, "safe", {"a": "b"}, ("bridge",), ""),)
+def inventory_row(*, cid=CID, name="safe", test_resource="", run_id="",
+                  resource_type=""):
+    return "\t".join((cid, name, test_resource, run_id, resource_type))
+
+
+def test_inventory_command_and_parser_are_fixed_field_minimal():
+    fake = FakeExecutor(lambda *_: CommandResult(0, inventory_row()))
+    items = collect_inventory(fake)
+    assert items == (InventoryItem(CID, "safe", "", "", ""),)
+    argv = fake.calls[0][0]
+    assert argv[:6] == ("/usr/bin/docker", "ps", "-a", "--no-trunc", "--format", argv[5])
+    assert argv[5] == "\t".join((
+        "{{.ID}}", "{{.Names}}",
+        '{{.Label "com.marketingos.test-resource"}}',
+        '{{.Label "com.marketingos.test-run-id"}}',
+        '{{.Label "com.marketingos.test-resource-type"}}',
+    ))
+    assert "{{json .}}" not in argv[5]
+    for prohibited in (".Command", ".Labels", ".Mounts", ".Image", ".Ports", ".Created", ".Size", ".Env"):
+        assert prohibited not in argv[5]
+
+
+def test_unrelated_unlabeled_inventory_parses_safely():
+    items = collect_inventory(FakeExecutor(lambda *_: CommandResult(0, inventory_row())))
+    reject_inventory_collision(items, pg_spec(Path("/tmp/b5j-unrelated")))
 
 
 @pytest.mark.parametrize("collision", [
-    "name", "run-label", "different-type", "different-name", "different-image",
+    "name", "run-label", "different-type", "different-name", "stopped-same-run",
 ])
 def test_inventory_collisions_reject(tmp_path, collision):
     spec = pg_spec(tmp_path)
-    name, labels, image = "other", {}, "unrelated@sha256:" + "d" * 64
-    if collision == "name": name = spec.container_name
-    if collision == "run-label": labels = {"com.marketingos.test-run-id": RUN_ID}
-    if collision == "different-type": labels = {
-        "com.marketingos.test-run-id": RUN_ID,
-        "com.marketingos.test-resource-type": "redis",
-    }
-    if collision in {"different-name", "different-image"}:
-        labels = {"com.marketingos.test-run-id": RUN_ID}
+    name, run_id, resource_type = "other", "r22-fedcba9876543210", "redis"
+    if collision == "name":
+        name = spec.container_name
+    else:
+        run_id = RUN_ID
+    if collision == "different-type":
+        resource_type = "redis"
+    item = InventoryItem(CID, name, "true", run_id, resource_type)
     with pytest.raises(OrchestrationError) as error:
-        reject_inventory_collision((InventoryItem(CID, name, labels, ("bridge",), image),), spec)
+        reject_inventory_collision((item,), spec)
     assert error.value.category is FailureClass.INVENTORY_COLLISION
 
 
-@pytest.mark.parametrize("labels", [{}, {"foreign.example/owner": "other"}])
-def test_unrelated_inventory_is_allowed(tmp_path, labels):
+def test_unrelated_inventory_is_allowed(tmp_path):
     reject_inventory_collision(
-        (InventoryItem(CID, "unrelated", labels, ("bridge",), "unrelated:1"),),
+        (InventoryItem(CID, "unrelated", "", "r22-fedcba9876543210", ""),),
         pg_spec(tmp_path),
     )
 
 
 def test_malformed_inventory_ownership_is_rejected(tmp_path):
-    malformed = InventoryItem(CID, "unrelated", None, ("bridge",))  # type: ignore[arg-type]
+    malformed = InventoryItem(CID, "unrelated", "", None, "")  # type: ignore[arg-type]
     with pytest.raises(OrchestrationError) as error:
         reject_inventory_collision((malformed,), pg_spec(tmp_path))
     assert error.value.category is FailureClass.INVENTORY_COLLISION
+
+
+@pytest.mark.parametrize("raw", [
+    "malformed",
+    "\t".join((CID, "safe", "", "")),
+    "\t".join((CID, "safe", "", "", "", "unexpected")),
+    "\t".join(("not-an-id", "safe", "", "", "")),
+    "\t".join((CID, "bad name", "", "", "")),
+])
+def test_malformed_inventory_fails_closed_without_echo(raw):
+    with pytest.raises(OrchestrationError) as error:
+        collect_inventory(FakeExecutor(lambda *_: CommandResult(0, raw)))
+    assert error.value.category is FailureClass.DOCKER_OBSERVATION_FAILED
+    assert raw not in str(error.value)
 
 
 def test_pre_port_collision_rejects():
@@ -185,40 +224,131 @@ def test_provisional_identity_mismatch_rejects(tmp_path, field, value):
 
 def test_successful_provision_orders_attestation_before_sentinel(tmp_path):
     spec, fake = fake_success(tmp_path)
-    result = provision_resource(spec, executor=fake, runtime_password="runtime-only",
-                                approved_root=tmp_path / "approved")
+    result = provision_resource(
+        spec, executor=fake, approved_root=tmp_path / "approved",
+        secret_factory=lambda: SYNTHETIC_SECRET,
+    )
     assert result["states"] == ("PRECHECK", "TEMP_ROOT_CREATED", "PRE_PORT_FREE",
         "CONTAINER_CREATED", "EXACT_CONTAINER_ID_CAPTURED", "CONTAINER_STARTED",
         "DOCKER_OBSERVED", "LISTENER_OBSERVED", "ATTESTED", "SENTINEL_WRITTEN", "READY")
     assert Path(result["sentinel"]).stat().st_mode & 0o777 == 0o600
 
 
-def test_runtime_password_only_reaches_create_child(tmp_path):
-    spec, fake = fake_success(tmp_path)
-    provision_resource(spec, executor=fake, runtime_password="runtime-only",
-                       approved_root=tmp_path / "approved")
+def test_secret_generated_once_and_only_reaches_create_child(tmp_path, capsys):
+    spec, fake = fake_success(tmp_path); calls = []
+    def generate():
+        calls.append(True)
+        return SYNTHETIC_SECRET
+    result = provision_resource(
+        spec, executor=fake, approved_root=tmp_path / "approved",
+        secret_factory=generate,
+    )
+    assert len(calls) == 1
     secret_calls = [(argv, kwargs) for argv, kwargs in fake.calls if
                     kwargs.get("env", {}).get("POSTGRES_PASSWORD")]
     assert len(secret_calls) == 1 and secret_calls[0][0] == spec.argv
-    assert all("runtime-only" not in " ".join(argv) for argv, _ in fake.calls)
+    argv, kwargs = secret_calls[0]
+    assert SYNTHETIC_SECRET not in " ".join(argv)
+    assert set(kwargs["env"]) == {"PATH", "LANG", "POSTGRES_PASSWORD"}
+    assert kwargs["env"]["POSTGRES_PASSWORD"] == SYNTHETIC_SECRET
+    assert SYNTHETIC_SECRET not in json.dumps(spec.sanitized_plan())
+    assert SYNTHETIC_SECRET not in json.dumps(result)
+    assert SYNTHETIC_SECRET not in Path(result["sentinel"]).read_text()
+    assert SYNTHETIC_SECRET not in (spec.temp_dir / "observation.json").read_text()
+    assert not [path for path in spec.temp_dir.iterdir() if SYNTHETIC_SECRET in path.read_text()]
+    captured = capsys.readouterr()
+    assert SYNTHETIC_SECRET not in captured.out and SYNTHETIC_SECRET not in captured.err
 
 
-def test_inherited_environment_is_not_propagated(tmp_path, monkeypatch):
+def test_default_csprng_is_invoked_once_with_32_bytes(tmp_path, monkeypatch):
+    spec, fake = fake_success(tmp_path); calls = []
+    def generate(byte_count):
+        calls.append(byte_count)
+        return SYNTHETIC_SECRET
+    monkeypatch.setattr(flows.secrets, "token_urlsafe", generate)
+    provision_resource(spec, executor=fake, approved_root=tmp_path / "approved")
+    assert calls == [32]
+
+
+@pytest.mark.parametrize("name", ["POSTGRES_TEST_PASSWORD", "POSTGRES_PASSWORD"])
+def test_inherited_postgres_secret_rejected_before_commands(tmp_path, monkeypatch, name):
+    monkeypatch.setenv(name, "operator-value-must-not-appear")
+    spec, fake = fake_success(tmp_path)
+    with pytest.raises(OrchestrationError) as error:
+        provision_resource(spec, executor=fake, approved_root=tmp_path / "approved")
+    assert error.value.category is FailureClass.EXTERNAL_POSTGRES_SECRET_FORBIDDEN
+    assert str(error.value) == "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
+    assert fake.calls == []
+    assert not spec.temp_dir.exists()
+
+
+def test_inherited_unapproved_environment_is_not_propagated(tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-inherit")
     spec, fake = fake_success(tmp_path)
-    provision_resource(spec, executor=fake, runtime_password="runtime-only",
-                       approved_root=tmp_path / "approved")
+    provision_resource(
+        spec, executor=fake, approved_root=tmp_path / "approved",
+        secret_factory=lambda: SYNTHETIC_SECRET,
+    )
     assert all("AWS_SECRET_ACCESS_KEY" not in kwargs.get("env", {}) for _, kwargs in fake.calls)
 
 
-def test_create_failure_is_sanitized(tmp_path):
+def test_secret_generation_failure_is_sanitized_and_prevents_create(tmp_path):
+    spec, fake = fake_success(tmp_path)
+    def fail_generation():
+        raise RuntimeError("sensitive-generator-detail")
+    with pytest.raises(OrchestrationError) as error:
+        provision_resource(
+            spec, executor=fake, approved_root=tmp_path / "approved",
+            secret_factory=fail_generation,
+        )
+    assert error.value.category is FailureClass.SECRET_GENERATION_FAILED
+    assert str(error.value) == "SECRET_GENERATION_FAILED"
+    assert not any(argv == spec.argv for argv, _ in fake.calls)
+    assert list(spec.temp_dir.iterdir()) == []
+
+
+def test_short_or_non_text_generated_secret_fails_closed(tmp_path):
+    for invalid in ("short", b"S" * 64):
+        spec, fake = fake_success(tmp_path)
+        with pytest.raises(OrchestrationError) as error:
+            provision_resource(
+                spec, executor=fake, approved_root=tmp_path / "approved",
+                secret_factory=lambda invalid=invalid: invalid,
+            )
+        assert error.value.category is FailureClass.SECRET_GENERATION_FAILED
+        assert not any(argv == spec.argv for argv, _ in fake.calls)
+        if spec.temp_dir.exists():
+            spec.temp_dir.rmdir()
+
+
+def test_create_failure_does_not_leak_generated_secret(tmp_path):
     spec, fake = fake_success(tmp_path)
     original = fake.handler
-    fake.handler = lambda argv, kwargs, n: (_ for _ in ()).throw(RuntimeError("password=leak")) if argv == spec.argv else original(argv, kwargs, n)
+    fake.handler = lambda argv, kwargs, n: (_ for _ in ()).throw(
+        RuntimeError(SYNTHETIC_SECRET)) if argv == spec.argv else original(argv, kwargs, n)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(spec, executor=fake, runtime_password="runtime-only",
-                           approved_root=tmp_path / "approved")
+        provision_resource(
+            spec, executor=fake, approved_root=tmp_path / "approved",
+            secret_factory=lambda: SYNTHETIC_SECRET,
+        )
     assert str(error.value) == "CREATE_FAILED"
+    assert SYNTHETIC_SECRET not in str(error.value)
+
+
+def test_dry_run_has_no_external_secret_requirement_or_generation(tmp_path, monkeypatch, capsys):
+    script = Path(__file__).resolve().parents[2] / "scripts/provision_integration_resources_cleanroom.py"
+    monkeypatch.setattr(sys, "argv", [str(script), "postgres", "--image", PG_IMAGE,
+                                     "--port", "15432", "--run-id", RUN_ID])
+    monkeypatch.setattr("_integration_execute_flows.secrets.token_urlsafe",
+                        lambda *_: pytest.fail("secret generated during dry-run"))
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(script), run_name="__main__")
+    assert result.value.code == 0
+    output = capsys.readouterr().out
+    assert '"mode": "DRY_RUN"' in output
+    assert SYNTHETIC_SECRET not in output
+    source = script.read_text()
+    assert "POSTGRES_TEST_PASSWORD" not in source and "POSTGRES_PASSWORD" not in source
 
 
 def test_provisional_rollback_uses_exact_id(tmp_path):
