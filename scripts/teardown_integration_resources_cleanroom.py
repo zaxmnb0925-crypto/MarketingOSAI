@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -25,6 +26,8 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if args.execute:
+        if os.geteuid() == 0:
+            raise SystemExit("STOP_BEFORE_DOCKER_MUTATION: ROOT_EXECUTE_FORBIDDEN")
         if not args.image:
             raise SystemExit("STOP: --image immutable reference is required")
         result = teardown_resource(

@@ -17,6 +17,9 @@ import time
 import sys
 from typing import Mapping, Protocol, Sequence
 
+from _integration_docker_command import (
+    docker_command, is_privileged_docker_command,
+)
 from _integration_resource_attestation import (
     ALEMBIC_TARGET_HEAD, APPROVED_TEMP_ROOT, CONTAINER_ID_PATTERN,
     ResourceAttestationError, load_sentinel, reconstruct_database_url,
@@ -30,7 +33,7 @@ from _integration_resource_lifecycle import (
 
 MAX_CAPTURE_BYTES = 256 * 1024
 DEFAULT_TIMEOUT = 30.0
-DOCKER, SS, LSOF = "/usr/bin/docker", "/usr/bin/ss", "/usr/bin/lsof"
+SS, LSOF = "/usr/bin/ss", "/usr/bin/lsof"
 
 
 class FailureClass(str, Enum):
@@ -78,13 +81,15 @@ class CommandExecutor(Protocol):
 
 class SubprocessCommandExecutor:
     """Bounded argv-only subprocess implementation; never logs raw output."""
-    _EXECUTABLES = {DOCKER, SS, LSOF, sys.executable}
+    _UNPRIVILEGED_EXECUTABLES = {SS, LSOF, sys.executable}
 
     def run(self, argv: Sequence[str], *, env: Mapping[str, str] | None = None,
             cwd: Path | None = None, timeout: float = DEFAULT_TIMEOUT,
             allowed_returncodes: frozenset[int] = frozenset({0})) -> CommandResult:
         command = tuple(argv)
-        if not command or command[0] not in self._EXECUTABLES:
+        if (not command or any(not isinstance(value, str) for value in command) or
+                (not is_privileged_docker_command(command) and
+                 command[0] not in self._UNPRIVILEGED_EXECUTABLES)):
             raise OrchestrationError(FailureClass.RESOURCE_IDENTITY_MISMATCH)
         try:
             completed = subprocess.run(
@@ -132,7 +137,7 @@ def collect_inventory(executor: CommandExecutor) -> tuple[InventoryItem, ...]:
         '{{.Label "com.marketingos.test-resource-type"}}',
     ))
     result = executor.run(
-        (DOCKER, "ps", "-a", "--no-trunc", "--format", inventory_format),
+        docker_command("ps", "-a", "--no-trunc", "--format", inventory_format),
         env=_child_env(),
     )
     items = []
@@ -170,7 +175,8 @@ def _inspect_argv(container_id: str) -> tuple[str, ...]:
               "{{json .State.StartedAt}}", "{{json .HostConfig.NetworkMode}}",
               "{{json .NetworkSettings.Ports}}", "{{json .Mounts}}",
               "{{json .HostConfig.Tmpfs}}", "{{json .Config.Volumes}}")
-    return (DOCKER, "inspect", "--type", "container", "--format", "\n".join(fields), container_id)
+    return docker_command("inspect", "--type", "container", "--format",
+                          "\n".join(fields), container_id)
 
 
 def parse_restricted_docker_observation(output: str, spec: DockerResourceSpec) -> dict[str, object]:

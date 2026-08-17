@@ -9,6 +9,7 @@ import sys
 import pytest
 
 import _integration_execute_flows as flows
+from _integration_docker_command import DOCKER_PRIVILEGE_PREFIX, docker_subcommand
 from _integration_execute_flows import (
     assert_same_run_resources, build_migration_execution, provision_resource,
     remove_exact_temp_path,
@@ -85,7 +86,7 @@ def fake_success(tmp_path: Path, *, post_host="127.0.0.1"):
 
     def handler(argv, kwargs, _count):
         nonlocal listener_count
-        if argv[1:3] == ("ps", "-a"):
+        if docker_subcommand(argv) == "ps":
             return CommandResult(0, "")
         if argv[0].endswith("/ss"):
             listener_count += 1
@@ -96,11 +97,11 @@ def fake_success(tmp_path: Path, *, post_host="127.0.0.1"):
                                  "" if listener_count == 1 else f"docker-proxy TCP {post_host}:{spec.port} (LISTEN)\n")
         if argv == spec.argv:
             return CommandResult(0, CID + "\n")
-        if len(argv) > 1 and argv[1] == "start":
+        if docker_subcommand(argv) == "start":
             return CommandResult(0, CID + "\n")
-        if len(argv) > 1 and argv[1] == "inspect":
+        if docker_subcommand(argv) == "inspect":
             return CommandResult(0, inspect_output(spec))
-        if len(argv) > 1 and argv[1] in {"stop", "rm"}:
+        if len(argv) > 1 and docker_subcommand(argv) in {"stop", "rm"}:
             return CommandResult(0, CID + "\n")
         raise AssertionError(f"unexpected fake command: {argv}")
 
@@ -144,8 +145,8 @@ def test_inventory_command_and_parser_are_fixed_field_minimal():
     items = collect_inventory(fake)
     assert items == (InventoryItem(CID, "safe", "", "", ""),)
     argv = fake.calls[0][0]
-    assert argv[:6] == ("/usr/bin/docker", "ps", "-a", "--no-trunc", "--format", argv[5])
-    assert argv[5] == "\t".join((
+    assert argv[:8] == (*DOCKER_PRIVILEGE_PREFIX, "ps", "-a", "--no-trunc", "--format", argv[7])
+    assert argv[7] == "\t".join((
         "{{.ID}}", "{{.Names}}",
         '{{.Label "com.marketingos.test-resource"}}',
         '{{.Label "com.marketingos.test-run-id"}}',
@@ -245,7 +246,7 @@ def test_redis_tmpfs_provision_preserves_stability_and_post_sentinel_ready(tmp_p
     inspect_count = 0
     def handler(argv, kwargs, _count):
         nonlocal listener_count, inspect_count
-        if argv[1:3] == ("ps", "-a"): return CommandResult(0, "")
+        if docker_subcommand(argv) == "ps": return CommandResult(0, "")
         if argv[0].endswith("/ss"):
             listener_count += 1
             return CommandResult(0, "" if listener_count == 1 else
@@ -254,8 +255,8 @@ def test_redis_tmpfs_provision_preserves_stability_and_post_sentinel_ready(tmp_p
             return CommandResult(1 if listener_count == 1 else 0, "" if listener_count == 1 else
                                  f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)\n")
         if argv == spec.argv: return CommandResult(0, CID + "\n")
-        if argv[1] == "start": return CommandResult(0, CID + "\n")
-        if argv[1] == "inspect":
+        if docker_subcommand(argv) == "start": return CommandResult(0, CID + "\n")
+        if docker_subcommand(argv) == "inspect":
             inspect_count += 1
             return CommandResult(0, inspect_output(spec))
         raise AssertionError(argv)
@@ -277,7 +278,7 @@ def test_redis_stability_rejects_hostconfig_tmpfs_drift(tmp_path):
             return CommandResult(0, f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*\n")
         if argv[0].endswith("/lsof"):
             return CommandResult(0, f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)")
-        if argv[1] == "inspect":
+        if docker_subcommand(argv) == "inspect":
             calls += 1
             return CommandResult(0, inspect_output(
                 spec, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
@@ -408,7 +409,7 @@ def test_ambiguous_create_failure_preserves_for_review_without_cleanup(tmp_path)
     assert error.value.resource_preserved is True
     assert str(error.value) == "PROVISION_FAILED_REVIEW_REQUIRED"
     assert SYNTHETIC_SECRET not in str(error.value)
-    assert not any(argv[1] in {"stop", "rm", "kill"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm", "kill"} for argv, _ in fake.calls)
     assert not any("--filter" in argv for argv, _ in fake.calls)
     assert spec.temp_dir.exists()
 
@@ -442,7 +443,7 @@ def test_atomic_write_rejects_existing_and_leaves_no_temp(tmp_path):
 def test_migration_builds_exact_argv_cwd_and_scrubbed_env(tmp_path):
     spec, sentinel = prepared_evidence(tmp_path)
     fake = FakeExecutor(lambda argv, _kwargs, _n: CommandResult(0, inspect_output(spec))
-                        if argv[0].endswith("docker") else
+                        if docker_subcommand(argv) is not None else
                         CommandResult(0, f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*\n")
                         if argv[0].endswith("ss") else CommandResult(0, f"x :{spec.port}"))
     argv, env, cwd = build_migration_execution(
@@ -465,7 +466,7 @@ def test_migration_wrong_run_rejects_before_commands(tmp_path):
 def test_migration_missing_password_rejects(tmp_path):
     spec, sentinel = prepared_evidence(tmp_path)
     fake = FakeExecutor(lambda argv, _kwargs, _n: CommandResult(0, inspect_output(spec))
-                        if argv[0].endswith("docker") else
+                        if docker_subcommand(argv) is not None else
                         CommandResult(0, f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*"))
     with pytest.raises(ResourceAttestationError):
         build_migration_execution(sentinel_path=sentinel, run_id=RUN_ID, image=PG_IMAGE,
@@ -556,7 +557,7 @@ def stability_fake(spec, inspect_values, *, listener_fails_after=None):
             open_now = listener_fails_after is None or listener_checks <= listener_fails_after
             return CommandResult(0 if open_now else 1,
                                  f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)" if open_now else "")
-        if argv[1] == "inspect":
+        if docker_subcommand(argv) == "inspect":
             return CommandResult(0, values.pop(0))
         raise AssertionError(argv)
     return FakeExecutor(handler)
@@ -570,7 +571,7 @@ def test_bounded_stability_uses_fake_clock_and_finite_attempts(tmp_path):
         fake, spec, CID, baseline, window=1.0, interval=0.5,
         monotonic=clock.monotonic, sleeper=clock.sleep)
     assert result["running"] is True and clock.sleeps == [0.5, 0.5]
-    assert len([argv for argv, _ in fake.calls if argv[1] == "inspect"]) == 2
+    assert len([argv for argv, _ in fake.calls if docker_subcommand(argv) == "inspect"]) == 2
 
 
 @pytest.mark.parametrize("change", ["exited", "cid", "started", "digest", "labels"])
@@ -604,7 +605,7 @@ def test_immediate_exit_after_first_listener_never_reaches_sentinel(tmp_path):
     original = fake.handler
     def exit_after_first(argv, kwargs, count):
         nonlocal inspect_count
-        if len(argv) > 1 and argv[1] == "inspect":
+        if docker_subcommand(argv) == "inspect":
             inspect_count += 1
             return CommandResult(0, inspect_output(spec, running=inspect_count == 1))
         return original(argv, kwargs, count)
@@ -625,7 +626,7 @@ def test_post_sentinel_exit_never_returns_ready(tmp_path, monkeypatch):
         real_write(path, payload, **kwargs)
         if path.name == "sentinel.json": sentinel_written = True
     def exit_after_sentinel(argv, kwargs, count):
-        if len(argv) > 1 and argv[1] == "inspect" and sentinel_written:
+        if docker_subcommand(argv) == "inspect" and sentinel_written:
             return CommandResult(0, inspect_output(spec, running=False))
         return original_handler(argv, kwargs, count)
     monkeypatch.setattr(flows, "write_secure_json", tracked_write)
@@ -650,7 +651,7 @@ def test_redis_post_sentinel_tmpfs_drift_never_returns_ready(tmp_path, monkeypat
             sentinel_written = True
     def handler(argv, kwargs, _count):
         nonlocal listener_count
-        if argv[1:3] == ("ps", "-a"): return CommandResult(0, "")
+        if docker_subcommand(argv) == "ps": return CommandResult(0, "")
         if argv[0].endswith("/ss"):
             listener_count += 1
             return CommandResult(0, "" if listener_count == 1 else
@@ -659,8 +660,8 @@ def test_redis_post_sentinel_tmpfs_drift_never_returns_ready(tmp_path, monkeypat
             return CommandResult(1 if listener_count == 1 else 0, "" if listener_count == 1 else
                                  f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)")
         if argv == spec.argv: return CommandResult(0, CID + "\n")
-        if argv[1] == "start": return CommandResult(0, CID + "\n")
-        if argv[1] == "inspect":
+        if docker_subcommand(argv) == "start": return CommandResult(0, CID + "\n")
+        if docker_subcommand(argv) == "inspect":
             config = ({"/data": "rw,size=1024,mode=0700"} if sentinel_written else None)
             return CommandResult(0, inspect_output(spec, host_tmpfs=config))
         raise AssertionError(argv)

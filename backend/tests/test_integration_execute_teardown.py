@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import _integration_execute_flows as flows
+from _integration_docker_command import docker_subcommand
 from _integration_execute_flows import provision_resource, teardown_resource
 from _integration_execute_orchestration import CommandResult, FailureClass, OrchestrationError
 from _integration_resource_lifecycle import (
@@ -57,7 +58,7 @@ class Fake:
 
     def run(self, argv, **kwargs):
         argv = tuple(argv); self.calls.append((argv, kwargs))
-        if argv[1:3] == ("ps", "-a"): return CommandResult(0, "")
+        if docker_subcommand(argv) == "ps": return CommandResult(0, "")
         if argv[0].endswith("/ss"):
             self.ss_count += 1
             open_now = self.ss_count > 1 and not (self.removed and self.port_closes)
@@ -67,14 +68,14 @@ class Fake:
             return CommandResult(0 if open_now else 1,
                                  f"docker-proxy TCP 127.0.0.1:{self.value.port} (LISTEN)" if open_now else "")
         if argv == self.value.argv: return CommandResult(0, CID + "\n")
-        if argv[1] == "start":
+        if docker_subcommand(argv) == "start":
             if self.start_fails: raise RuntimeError("synthetic start failure")
             return CommandResult(0, CID + "\n")
-        if argv[1] == "inspect":
+        if docker_subcommand(argv) == "inspect":
             if self.removed: return CommandResult(1, "")
             return CommandResult(0, inspected(self.value, running=not self.start_fails))
-        if argv[1] == "stop": return CommandResult(0, CID + "\n")
-        if argv[1] == "rm": self.removed = True; return CommandResult(0, CID + "\n")
+        if docker_subcommand(argv) == "stop": return CommandResult(0, CID + "\n")
+        if docker_subcommand(argv) == "rm": self.removed = True; return CommandResult(0, CID + "\n")
         raise AssertionError(argv)
 
 
@@ -100,7 +101,7 @@ def test_redis_teardown_requires_fresh_exact_tmpfs_identity(tmp_path):
         sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
         image=value.image, executor=fake, approved_root=tmp_path / "approved")
     assert result["state"] == "COMPLETE"
-    assert [argv[1:] for argv, _ in fake.calls if argv[1] in {"stop", "rm"}] == [
+    assert [argv[3:] for argv, _ in fake.calls if docker_subcommand(argv) in {"stop", "rm"}] == [
         ("stop", CID), ("rm", CID)]
 
 
@@ -115,7 +116,7 @@ def test_redis_volume_observation_never_authorizes_teardown(tmp_path):
     fake = Fake(value); fake.ss_count = 1
     original = fake.run
     def volume_instead_of_tmpfs(argv, **kwargs):
-        if tuple(argv)[1] == "inspect" and not fake.removed:
+        if docker_subcommand(tuple(argv)) == "inspect" and not fake.removed:
             fake.calls.append((tuple(argv), kwargs))
             mounts = [{"Type": "volume", "Source": "anonymous-id",
                        "Destination": "/data", "RW": True}]
@@ -126,7 +127,7 @@ def test_redis_volume_observation_never_authorizes_teardown(tmp_path):
         teardown_resource(
             sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
             image=value.image, executor=fake, approved_root=tmp_path / "approved")
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_redis_tmpfs_drift_never_authorizes_teardown(tmp_path):
@@ -140,7 +141,7 @@ def test_redis_tmpfs_drift_never_authorizes_teardown(tmp_path):
     fake = Fake(value); fake.ss_count = 1
     original = fake.run
     def drift(argv, **kwargs):
-        if tuple(argv)[1] == "inspect" and not fake.removed:
+        if docker_subcommand(tuple(argv)) == "inspect" and not fake.removed:
             fake.calls.append((tuple(argv), kwargs))
             return CommandResult(0, inspected(
                 value, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
@@ -150,7 +151,7 @@ def test_redis_tmpfs_drift_never_authorizes_teardown(tmp_path):
         teardown_resource(
             sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
             image=value.image, executor=fake, approved_root=tmp_path / "approved")
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_start_failure_preserves_exact_resource_for_review(tmp_path):
@@ -162,7 +163,7 @@ def test_start_failure_preserves_exact_resource_for_review(tmp_path):
     assert error.value.original_category is FailureClass.START_FAILED
     assert error.value.ownership_boundary == "POST_CREATE_PRESERVE"
     assert error.value.resource_preserved is True
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
     assert value.temp_dir.exists()
 
 
@@ -181,7 +182,7 @@ def test_sentinel_write_failure_preserves_resource_for_review(tmp_path, monkeypa
     assert error.value.original_category is FailureClass.SENTINEL_WRITE_FAILED
     assert error.value.ownership_boundary == "POST_CREATE_PRESERVE"
     assert error.value.resource_preserved is True
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
     assert value.temp_dir.exists()
 
 
@@ -196,7 +197,7 @@ def test_initial_observation_failure_preserves_resource(tmp_path):
     value = spec(tmp_path); fake = Fake(value)
     original = fake.run
     def invalid_observation(argv, **kwargs):
-        if tuple(argv)[1] == "inspect":
+        if docker_subcommand(tuple(argv)) == "inspect":
             fake.calls.append((tuple(argv), kwargs))
             return CommandResult(0, "malformed")
         return original(argv, **kwargs)
@@ -204,7 +205,7 @@ def test_initial_observation_failure_preserves_resource(tmp_path):
     with pytest.raises(OrchestrationError) as error:
         provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
     assert_review_required(error, FailureClass.DOCKER_OBSERVATION_FAILED)
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
     assert value.temp_dir.exists()
 
 
@@ -212,7 +213,7 @@ def test_redis_storage_attestation_failure_preserves_resource(tmp_path):
     value = redis_spec(tmp_path); fake = Fake(value)
     original = fake.run
     def invalid_storage(argv, **kwargs):
-        if tuple(argv)[1] == "inspect":
+        if docker_subcommand(tuple(argv)) == "inspect":
             fake.calls.append((tuple(argv), kwargs))
             return CommandResult(0, inspected(
                 value, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
@@ -221,7 +222,7 @@ def test_redis_storage_attestation_failure_preserves_resource(tmp_path):
     with pytest.raises(OrchestrationError) as error:
         provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
     assert_review_required(error, FailureClass.RESOURCE_IDENTITY_MISMATCH)
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
     assert value.temp_dir.exists()
 
 
@@ -230,7 +231,7 @@ def test_stability_drift_preserves_resource(tmp_path):
     original = fake.run
     def drift(argv, **kwargs):
         nonlocal inspect_count
-        if tuple(argv)[1] == "inspect":
+        if docker_subcommand(tuple(argv)) == "inspect":
             inspect_count += 1
             fake.calls.append((tuple(argv), kwargs))
             started = ("2026-08-16T00:00:01Z" if inspect_count > 1 else
@@ -242,7 +243,7 @@ def test_stability_drift_preserves_resource(tmp_path):
     with pytest.raises(OrchestrationError) as error:
         provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
     assert_review_required(error, FailureClass.LIFECYCLE_STABILITY_FAILED)
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
     assert value.temp_dir.exists()
 
 
@@ -256,7 +257,7 @@ def test_post_sentinel_failure_preserves_container_and_metadata(tmp_path, monkey
             sentinel_written = True
     original = fake.run
     def post_sentinel_drift(argv, **kwargs):
-        if tuple(argv)[1] == "inspect" and sentinel_written:
+        if docker_subcommand(tuple(argv)) == "inspect" and sentinel_written:
             fake.calls.append((tuple(argv), kwargs))
             return CommandResult(0, inspected(value, running=False))
         return original(argv, **kwargs)
@@ -268,7 +269,7 @@ def test_post_sentinel_failure_preserves_container_and_metadata(tmp_path, monkey
     assert sentinel_written
     assert (value.temp_dir / "sentinel.json").is_file()
     assert (value.temp_dir / "observation.json").is_file()
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_teardown_uses_fresh_observation_exact_id_and_closes_port(tmp_path):
@@ -277,7 +278,7 @@ def test_teardown_uses_fresh_observation_exact_id_and_closes_port(tmp_path):
                                resource_type="postgres", image=IMAGE,
                                executor=fake, approved_root=tmp_path / "approved")
     assert result == {"state": "COMPLETE", "container_id": CID, "path_absent": True}
-    assert [argv[1:] for argv, _ in fake.calls if argv[1] in {"stop", "rm"}] == [("stop", CID), ("rm", CID)]
+    assert [argv[3:] for argv, _ in fake.calls if docker_subcommand(argv) in {"stop", "rm"}] == [("stop", CID), ("rm", CID)]
     assert fake.ss_count == 3
 
 
@@ -294,7 +295,7 @@ def test_teardown_identity_mismatch_never_stops_or_removes(tmp_path):
     value, sentinel = evidence(tmp_path); fake = Fake(value); fake.ss_count = 1
     original = fake.run
     def mismatch(argv, **kwargs):
-        if tuple(argv)[1] == "inspect" and not fake.removed:
+        if docker_subcommand(tuple(argv)) == "inspect" and not fake.removed:
             fake.calls.append((tuple(argv), kwargs))
             return CommandResult(0, inspected(value, labels={}))
         return original(argv, **kwargs)
@@ -303,7 +304,7 @@ def test_teardown_identity_mismatch_never_stops_or_removes(tmp_path):
         teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
                           resource_type="postgres", image=IMAGE,
                           executor=fake, approved_root=tmp_path / "approved")
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_execute_scripts_never_use_fixture_observation_branch():
@@ -335,7 +336,7 @@ def test_normal_teardown_rejects_exited_container(tmp_path):
         teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
                           resource_type="postgres", image=IMAGE, executor=fake,
                           approved_root=tmp_path / "approved")
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_normal_teardown_rejects_missing_listener(tmp_path):
@@ -345,4 +346,4 @@ def test_normal_teardown_rejects_missing_listener(tmp_path):
                           resource_type="postgres", image=IMAGE, executor=fake,
                           approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.LISTENER_ATTESTATION_FAILED
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)

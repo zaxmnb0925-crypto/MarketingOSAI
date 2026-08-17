@@ -34,6 +34,27 @@ IMPLEMENTED_AND_STATICALLY_VERIFIED: execution is injectable and argv-only; Dock
 
 RUNTIME_NOT_YET_VERIFIED: no Docker daemon, image, PostgreSQL, Redis, Alembic migration, or integration test was used during B5F. Every real execution remains separately authorized.
 
+## Exact Docker privilege boundary
+
+The Python lifecycle remains the unprivileged operator process and execute mode
+rejects UID 0 before Docker or resource mutation. Only reviewed Docker daemon
+commands receive privilege, with the immutable argv prefix
+`/usr/bin/sudo -- /usr/bin/docker <reviewed-arguments>`. The Docker-only
+builder permits only `ps`, `create`, `start`, `inspect`, `stop`, and `rm`; the
+executor rejects bare Docker, generic sudo targets, missing `--`, sudo options,
+and arbitrary privileged executables. Absolute paths are source constants, not
+environment or PATH selections, and subprocess execution remains argv-only with
+`shell=False`, bounded capture, and timeout enforcement. Dry-run plans expose
+the same privileged create argv used by execute mode.
+
+The operator is intentionally not added to the Docker group: Docker socket
+access is effectively broad host privilege and would bypass per-command sudo
+review. Sudo Python, sudo shells, generic privileged wrappers, Docker socket
+permission widening, password piping, askpass, and inherited sudo credentials
+through environment flags are prohibited. Authentication failure of an exact
+Docker command follows the existing fail-closed create-ambiguity or
+post-create-preservation contract.
+
 ## Provision failure preservation boundary
 
 Before Docker create, validation, collision, port, secret-generation, and exact

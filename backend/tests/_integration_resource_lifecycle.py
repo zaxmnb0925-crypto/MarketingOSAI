@@ -15,6 +15,7 @@ import stat
 import sys
 from typing import Any, Mapping
 
+from _integration_docker_command import docker_command
 from _integration_resource_attestation import (
     ALEMBIC_TARGET_HEAD,
     APPROVED_TEMP_ROOT,
@@ -212,7 +213,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         DOCKER_LABELS["run"]: run_id,
         DOCKER_LABELS["type"]: resource_type,
     }
-    prefix = ["/usr/bin/docker", "create", "--name", name, "--network", "bridge"]
+    prefix = list(docker_command("create", "--name", name, "--network", "bridge"))
     for key, value in labels.items():
         prefix += ["--label", f"{key}={value}"]
     if resource_type == "postgres":
@@ -409,7 +410,7 @@ def authorize_teardown(*, sentinel_path: Path, observation_path: Path,
     if attested.resource_container_id is None:
         raise ResourceAttestationError("Docker teardown requires exact container ID")
     exact = attested.resource_container_id
-    return (("/usr/bin/docker", "stop", exact), ("/usr/bin/docker", "rm", exact))
+    return (docker_command("stop", exact), docker_command("rm", exact))
 
 
 def validate_cleanup_path(path: Path, *, run_id: str, resource_type: str,

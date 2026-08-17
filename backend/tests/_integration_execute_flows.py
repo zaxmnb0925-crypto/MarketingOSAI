@@ -9,8 +9,9 @@ import sys
 import time
 from typing import Callable
 
+from _integration_docker_command import docker_command
 from _integration_execute_orchestration import (
-    CommandExecutor, FailureClass, OrchestrationError, DOCKER, _child_env,
+    CommandExecutor, FailureClass, OrchestrationError, _child_env,
     _inspect_argv, collect_docker_observation, collect_inventory,
     observe_lifecycle_stability, observe_listener, reject_inventory_collision,
     require_loopback_listener, require_port_free, validate_provisional_observation,
@@ -87,7 +88,7 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
     states.extend(("CONTAINER_CREATED", "EXACT_CONTAINER_ID_CAPTURED"))
     try:
         try:
-            executor.run((DOCKER, "start", container_id), env=_child_env())
+            executor.run(docker_command("start", container_id), env=_child_env())
         except Exception:
             raise OrchestrationError(FailureClass.START_FAILED) from None
         states.append("CONTAINER_STARTED")
@@ -198,8 +199,8 @@ def teardown_resource(*, sentinel_path: Path, run_id: str, resource_type: str,
         raise OrchestrationError(FailureClass.TEARDOWN_AUTHORIZATION_FAILED)
     exact = attested.resource_container_id
     try:
-        executor.run((DOCKER, "stop", exact), env=_child_env())
-        executor.run((DOCKER, "rm", exact), env=_child_env())
+        executor.run(docker_command("stop", exact), env=_child_env())
+        executor.run(docker_command("rm", exact), env=_child_env())
         absent = executor.run(_inspect_argv(exact), env=_child_env(),
                               allowed_returncodes=frozenset({1}))
         if absent.returncode != 1:

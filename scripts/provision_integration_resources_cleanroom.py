@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -29,6 +30,8 @@ def main() -> int:
         image=args.image, port=args.port, redis_db=args.redis_db,
     )
     if args.execute:
+        if os.geteuid() == 0:
+            raise SystemExit("STOP_BEFORE_DOCKER_MUTATION: ROOT_EXECUTE_FORBIDDEN")
         result = provision_resource(
             spec, executor=SubprocessCommandExecutor(),
         )
