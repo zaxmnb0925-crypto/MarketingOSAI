@@ -276,14 +276,27 @@ def write_secure_json(path: Path, payload: Mapping[str, Any], *,
         raise ResourceAttestationError("evidence path identity mismatch")
     if path.exists() or path.is_symlink():
         raise ResourceAttestationError("evidence file already exists")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(serialized)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if temporary.is_symlink() or stat.S_IMODE(temporary.stat().st_mode) != 0o600:
+            raise ResourceAttestationError("temporary evidence mode invalid")
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise ResourceAttestationError("evidence transaction verification failed")
     except Exception:
         try:
-            path.unlink()
+            temporary.unlink()
         except OSError:
             pass
         raise

@@ -21,6 +21,7 @@
 - Integration resources must be disposable, loopback-bound, digest-pinned, run-scoped, and exclusively owned. Shared PostgreSQL/Redis, inherited resource URLs, `FLUSHALL`, `FLUSHDB`, broad process killing, pruning, or wildcard cleanup are prohibited.
 - Resource sentinels must remain outside Git, contain no secrets, and match run ID, exact PID/container ID, labels, digest, listener, port, start time, and temporary path before migration, tests, or cleanup. Identity mismatch fails closed and preserves the resource.
 - Lifecycle tooling must default to dry-run, use immutable `repository@sha256:<digest>` images, argv-list command construction, sanitized environments, runtime-only credentials, and exact-ID teardown. Docker, migration, and cleanup execution require separate approval.
+- Execute-mode implementation does not authorize execution. Real Docker daemon access, resource lifecycle, migration, integration testing, and cleanup each require separate explicit approval and fresh attestation.
 - External provider network access is denied by default. Provider behavior must use mocks, fakes, `httpx.MockTransport`, ASGI transport, or monkeypatching unless a future network integration test receives separate approval.
 - `scripts/run_backend_regression_isolated.sh` is **PRODUCTION-COUPLED — DO NOT USE FOR CLEAN-ROOM DEVELOPMENT**.
 - Backend range inputs and committed hash-pinned lock candidates are documented in `docs/DEPENDENCY_REPRODUCIBILITY.md`; verified installs must retain `--require-hashes`.

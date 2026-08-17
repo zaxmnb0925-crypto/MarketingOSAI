@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import subprocess
 import sys
 
+from _integration_execute_flows import assert_same_run_resources
+from _integration_execute_orchestration import SubprocessCommandExecutor
+from _integration_live_attestation import attest_live_resource
 from _integration_resource_attestation import (
-    load_sentinel, reconstruct_database_url, reconstruct_redis_url,
-    safe_diagnostic, validate_runtime_observation,
+    reconstruct_database_url, reconstruct_redis_url, safe_diagnostic,
 )
+from _integration_resource_lifecycle import sanitized_subprocess_environment
 from _test_environment_guard import validate_test_environment
 
 ALLOWLIST = {
@@ -40,22 +42,41 @@ def main(argv: list[str]) -> int:
         raise RuntimeError("integration test/resource mapping is not allowlisted")
 
     run_id = _required("RESOURCE_RUN_ID")
-    postgres = load_sentinel(_required("POSTGRES_SENTINEL_PATH"),
-                             expected_run_id=run_id, expected_type="postgres")
-    validate_runtime_observation(postgres, _required("POSTGRES_OBSERVATION_PATH"))
-    child_env = dict(os.environ)
+    if _required("TEST_RUN_ID") != run_id:
+        raise RuntimeError("TEST_RUN_ID and RESOURCE_RUN_ID must match")
+    executor = SubprocessCommandExecutor()
+    postgres = attest_live_resource(
+        sentinel_path=_required("POSTGRES_SENTINEL_PATH"), run_id=run_id,
+        resource_type="postgres", image=_required("POSTGRES_IMAGE_REFERENCE"),
+        executor=executor,
+    )
+    child_env = sanitized_subprocess_environment({
+        "ENVIRONMENT": "test", "MARKETINGOS_TEST_MODE": "integration",
+        "MARKETINGOS_TEST_RESOURCE_SCOPE": "disposable", "TEST_RUN_ID": run_id,
+        "SECRET_KEY": "test-only-synthetic-secret",
+        "OPENAI_API_KEY": "test-only-not-a-live-key",
+        "OAUTH_TOKEN_ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "API_DOCS_ENABLED": "false", "REAL_PUBLISH_ENABLED": "false",
+        "META_PUBLISH_TRANSPORT_ENABLED": "false",
+        "META_PUBLISH_CANARY_MODE_ENABLED": "true",
+    })
     child_env["DATABASE_URL"] = reconstruct_database_url(
         postgres, _required("POSTGRES_TEST_PASSWORD")
     )
     child_env.pop("POSTGRES_TEST_PASSWORD", None)
     resources = [postgres]
     if needs_redis:
-        redis = load_sentinel(_required("REDIS_SENTINEL_PATH"),
-                              expected_run_id=run_id, expected_type="redis")
-        validate_runtime_observation(redis, _required("REDIS_OBSERVATION_PATH"))
+        redis = attest_live_resource(
+            sentinel_path=_required("REDIS_SENTINEL_PATH"), run_id=run_id,
+            resource_type="redis", image=_required("REDIS_IMAGE_REFERENCE"),
+            executor=executor,
+        )
+        assert_same_run_resources(postgres.resource_run_id, redis.resource_run_id,
+                                  redis_required=True)
         child_env["REDIS_URL"] = reconstruct_redis_url(redis)
         resources.append(redis)
     else:
+        assert_same_run_resources(postgres.resource_run_id, None, redis_required=False)
         child_env["REDIS_URL"] = "redis://127.0.0.1:1/15"
 
     previous = dict(os.environ)
@@ -72,7 +93,7 @@ def main(argv: list[str]) -> int:
     command = [sys.executable, "-m", "pytest", "-q", "--disable-warnings",
                "-p", "_test_isolation_plugin", "-p", "_v013h_legacy_target_compat",
                relative.removeprefix("backend/")]
-    return subprocess.run(command, env=child_env, cwd=root / "backend", check=False).returncode
+    return executor.run(command, env=child_env, cwd=root / "backend").returncode
 
 
 if __name__ == "__main__":

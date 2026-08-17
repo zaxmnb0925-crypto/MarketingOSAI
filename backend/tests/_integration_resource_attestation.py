@@ -220,7 +220,8 @@ def validate_candidate_port(port: int, *, ss_listener_output: str,
 
 def validate_migration_gate(attestation: ResourceAttestation,
                             observation_path: str | os.PathLike[str], *, requested_head: str,
-                            approved_root: Path = APPROVED_TEMP_ROOT) -> None:
+                            approved_root: Path = APPROVED_TEMP_ROOT,
+                            environment: Mapping[str, str] | None = None) -> None:
     if attestation.resource_type != "postgres" or requested_head != ALEMBIC_TARGET_HEAD:
         _fail("migration target gate mismatch")
     required_environment = {
@@ -228,7 +229,8 @@ def validate_migration_gate(attestation: ResourceAttestation,
         "MARKETINGOS_TEST_MODE": "integration",
         "MARKETINGOS_TEST_RESOURCE_SCOPE": "disposable",
     }
-    if any(os.environ.get(name) != value for name, value in required_environment.items()):
+    source_environment = os.environ if environment is None else environment
+    if any(source_environment.get(name) != value for name, value in required_environment.items()):
         _fail("migration environment gate mismatch")
     validate_runtime_observation(attestation, observation_path, approved_root=approved_root)
 

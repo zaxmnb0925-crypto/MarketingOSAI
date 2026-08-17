@@ -247,8 +247,10 @@ def test_cli_sources_default_dry_run_and_avoid_unsafe_execution():
     for unsafe in ("shell=True", "os.system", "eval(", "docker system prune",
                    "docker container prune", "pkill", "killall"):
         assert unsafe not in text
-    assert "STOP: Docker execution is not implemented or authorized" in text
-    assert "STOP: Alembic execution is not implemented or authorized" in text
+    assert "SubprocessCommandExecutor" in text
+    assert "provision_resource" in text
+    assert "execute_migration" in text
+    assert "teardown_resource" in text
 
 
 def test_subprocess_environment_is_allowlisted_and_scrubbed(monkeypatch):
