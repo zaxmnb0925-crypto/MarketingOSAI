@@ -9,6 +9,7 @@ import sys
 import pytest
 
 import _integration_execute_flows as flows
+import _integration_resource_lifecycle as lifecycle
 from _integration_docker_command import DOCKER_PRIVILEGE_PREFIX, docker_subcommand
 from _integration_execute_flows import (
     assert_same_run_resources, build_migration_execution, provision_resource,
@@ -24,7 +25,8 @@ from _integration_execute_orchestration import (
 from _integration_resource_attestation import ResourceAttestationError
 from _integration_resource_lifecycle import (
     build_docker_spec, create_resource_directories, normalize_docker_observation,
-    sentinel_payload, validate_image_reference, write_secure_json,
+    postgres_password_file_path, read_postgres_password_file, sentinel_payload,
+    validate_image_reference, write_secure_json,
 )
 
 RUN_ID = "r22-0123456789abcdef"
@@ -416,8 +418,10 @@ def test_ambiguous_create_failure_preserves_for_review_without_cleanup(tmp_path)
 
 def test_dry_run_has_no_external_secret_requirement_or_generation(tmp_path, monkeypatch, capsys):
     script = Path(__file__).resolve().parents[2] / "scripts/provision_integration_resources_cleanroom.py"
+    password_path = postgres_password_file_path(RUN_ID)
     monkeypatch.setattr(sys, "argv", [str(script), "postgres", "--image", PG_IMAGE,
-                                     "--port", "15432", "--run-id", RUN_ID])
+                                     "--port", "15432", "--run-id", RUN_ID,
+                                     "--postgres-password-file", str(password_path)])
     monkeypatch.setattr("_integration_execute_flows.secrets.token_urlsafe",
                         lambda *_: pytest.fail("secret generated during dry-run"))
     with pytest.raises(SystemExit) as result:
@@ -427,7 +431,8 @@ def test_dry_run_has_no_external_secret_requirement_or_generation(tmp_path, monk
     assert '"mode": "DRY_RUN"' in output
     assert SYNTHETIC_SECRET not in output
     source = script.read_text()
-    assert "POSTGRES_TEST_PASSWORD" not in source and "POSTGRES_PASSWORD" not in source
+    assert "--postgres-password <" not in source
+    assert "postgres_password_file_handoff" in output
 
 
 def test_atomic_write_rejects_existing_and_leaves_no_temp(tmp_path):
@@ -685,3 +690,138 @@ def provision_fast(*args, **kwargs):
     kwargs.setdefault("monotonic", clock.monotonic)
     kwargs.setdefault("sleeper", clock.sleep)
     return provision_resource(*args, **kwargs)
+
+
+def _credential_file(tmp_path, monkeypatch, *, content=SYNTHETIC_SECRET, mode=0o600):
+    root = tmp_path / "functional-test"
+    run = root / RUN_ID
+    root.mkdir(mode=0o700)
+    run.mkdir(mode=0o700)
+    monkeypatch.setattr(lifecycle, "FUNCTIONAL_TEST_STATE_ROOT", root)
+    path = lifecycle.postgres_password_file_path(RUN_ID)
+    path.write_bytes(content if isinstance(content, bytes) else content.encode("ascii"))
+    path.chmod(mode)
+    return path
+
+
+def test_postgres_password_file_valid_exact_metadata(tmp_path, monkeypatch):
+    path = _credential_file(tmp_path, monkeypatch)
+    assert read_postgres_password_file(path, run_id=RUN_ID) == SYNTHETIC_SECRET
+
+
+def test_postgres_password_file_missing_rejected(tmp_path, monkeypatch):
+    path = _credential_file(tmp_path, monkeypatch)
+    path.unlink()
+    with pytest.raises(ResourceAttestationError, match="unavailable"):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+def test_postgres_password_file_symlink_rejected(tmp_path, monkeypatch):
+    path = _credential_file(tmp_path, monkeypatch)
+    target = path.with_name("target")
+    path.rename(target)
+    path.symlink_to(target)
+    with pytest.raises(ResourceAttestationError):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+def test_postgres_password_directory_rejected(tmp_path, monkeypatch):
+    path = _credential_file(tmp_path, monkeypatch)
+    path.unlink()
+    path.mkdir(mode=0o600)
+    with pytest.raises(ResourceAttestationError, match="metadata"):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o400])
+def test_postgres_password_file_exact_mode_required(tmp_path, monkeypatch, mode):
+    path = _credential_file(tmp_path, monkeypatch, mode=mode)
+    with pytest.raises(ResourceAttestationError, match="metadata"):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+@pytest.mark.parametrize("identity", [(100000, None), (None, 100000)])
+def test_postgres_password_file_exact_owner_required(tmp_path, monkeypatch, identity):
+    path = _credential_file(tmp_path, monkeypatch)
+    uid, gid = identity
+    current_uid, current_gid = lifecycle.lifecycle_operator_identity()
+    monkeypatch.setattr(lifecycle, "lifecycle_operator_identity",
+                        lambda: (uid if uid is not None else current_uid,
+                                 gid if gid is not None else current_gid))
+    with pytest.raises(ResourceAttestationError, match="metadata"):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+@pytest.mark.parametrize("content", [b"", b"S" * 44, b"S" * 42 + b"\n",
+                                     b"S" * 42 + b"\x00", b"S" * 42 + b"!"])
+def test_postgres_password_file_invalid_content_rejected(tmp_path, monkeypatch, content):
+    path = _credential_file(tmp_path, monkeypatch, content=content)
+    with pytest.raises(ResourceAttestationError):
+        read_postgres_password_file(path, run_id=RUN_ID)
+
+
+@pytest.mark.parametrize("candidate", [
+    Path("/opt/MarketingOSAI/postgres-password"),
+    Path(__file__).resolve(),
+    Path("/home/cbemsadmin/postgres-password"),
+])
+def test_postgres_password_file_unapproved_path_rejected(candidate):
+    with pytest.raises(ResourceAttestationError, match="path invalid"):
+        read_postgres_password_file(candidate, run_id=RUN_ID)
+
+
+def test_postgres_password_file_uses_nofollow_and_fstat(tmp_path, monkeypatch):
+    path = _credential_file(tmp_path, monkeypatch)
+    real_open, observed = lifecycle.os.open, {}
+    def tracked_open(value, flags):
+        observed["flags"] = flags
+        return real_open(value, flags)
+    monkeypatch.setattr(lifecycle.os, "open", tracked_open)
+    assert read_postgres_password_file(path, run_id=RUN_ID) == SYNTHETIC_SECRET
+    if hasattr(lifecycle.os, "O_NOFOLLOW"):
+        assert observed["flags"] & lifecycle.os.O_NOFOLLOW
+
+
+def test_postgres_cli_requires_password_file_and_redis_rejects_it(monkeypatch):
+    script = Path(__file__).resolve().parents[2] / "scripts/provision_integration_resources_cleanroom.py"
+    base = [str(script), "postgres", "--image", PG_IMAGE, "--port", "15432",
+            "--run-id", RUN_ID]
+    monkeypatch.setattr(sys, "argv", base)
+    with pytest.raises(SystemExit, match="requires --postgres-password-file"):
+        runpy.run_path(str(script), run_name="__main__")
+    monkeypatch.setattr(sys, "argv", [str(script), "redis", "--image", REDIS_IMAGE,
+        "--port", "16379", "--run-id", RUN_ID, "--postgres-password-file",
+        str(postgres_password_file_path(RUN_ID))])
+    with pytest.raises(SystemExit, match="Redis does not accept"):
+        runpy.run_path(str(script), run_name="__main__")
+
+
+def test_postgres_execute_reads_same_secret_without_output(tmp_path, monkeypatch, capsys):
+    path = _credential_file(tmp_path, monkeypatch)
+    script = Path(__file__).resolve().parents[2] / "scripts/provision_integration_resources_cleanroom.py"
+    captured = {}
+    def fake_provision(spec, *, executor, secret_factory):
+        captured["password"] = secret_factory()
+        return {"state": "READY", "container_id": CID, "secret_logged": False}
+    monkeypatch.setattr(flows, "provision_resource", fake_provision)
+    monkeypatch.setattr("_integration_execute_flows.provision_resource", fake_provision)
+    monkeypatch.setattr("_integration_execute_orchestration.SubprocessCommandExecutor", lambda: object())
+    monkeypatch.setattr(sys, "argv", [str(script), "postgres", "--image", PG_IMAGE,
+        "--port", "15432", "--run-id", RUN_ID, "--postgres-password-file",
+        str(path), "--execute"])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(script), run_name="__main__")
+    assert result.value.code == 0
+    assert captured["password"] == SYNTHETIC_SECRET
+    output = capsys.readouterr().out
+    assert SYNTHETIC_SECRET not in output and "READY" in output
+
+
+def test_password_file_contract_has_no_plaintext_cli_and_preserves_env_rejection():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts/provision_integration_resources_cleanroom.py").read_text()
+    flow = Path(flows.__file__).read_text()
+    assert "--postgres-password-file" in script
+    assert "--postgres-password=" not in script
+    assert "POSTGRES_TEST_PASSWORD" in flow and "POSTGRES_PASSWORD" in flow
+    assert "EXTERNAL_POSTGRES_SECRET_FORBIDDEN" in flow

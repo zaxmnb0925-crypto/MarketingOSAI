@@ -50,6 +50,10 @@ REDIS_TMPFS_ATTESTATION = {
     "size_bytes": REDIS_TMPFS_SIZE_BYTES, "mode": "0700",
 }
 
+FUNCTIONAL_TEST_STATE_ROOT = Path("/tmp/marketingos-functional-test")
+POSTGRES_PASSWORD_FILENAME = "postgres-password"
+POSTGRES_PASSWORD_LENGTH = 43
+
 
 def normalize_redis_tmpfs_configuration(value: Any) -> dict[str, object]:
     if not isinstance(value, Mapping) or set(value) != {REDIS_TMPFS_DESTINATION}:
@@ -117,6 +121,61 @@ def validate_run_id(run_id: str) -> str:
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise ResourceAttestationError("run-id format invalid")
     return run_id
+
+
+def postgres_password_file_path(run_id: str) -> Path:
+    """Return the only permitted operator-owned PostgreSQL secret path."""
+    validate_run_id(run_id)
+    return FUNCTIONAL_TEST_STATE_ROOT / run_id / POSTGRES_PASSWORD_FILENAME
+
+
+def read_postgres_password_file(path: Path, *, run_id: str) -> str:
+    """Read one run-scoped secret through a verified, non-following descriptor."""
+    expected = postgres_password_file_path(run_id)
+    if not path.is_absolute() or path != expected:
+        raise ResourceAttestationError("PostgreSQL password file path invalid")
+
+    expected_uid, expected_gid = lifecycle_operator_identity()
+    for directory in (FUNCTIONAL_TEST_STATE_ROOT, expected.parent):
+        if directory.is_symlink():
+            raise ResourceAttestationError("PostgreSQL password path contains symlink")
+        try:
+            metadata = directory.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ResourceAttestationError("PostgreSQL password directory unavailable") from exc
+        if (not stat.S_ISDIR(metadata.st_mode) or
+                stat.S_IMODE(metadata.st_mode) != 0o700 or
+                metadata.st_uid != expected_uid or metadata.st_gid != expected_gid):
+            raise ResourceAttestationError("PostgreSQL password directory metadata invalid")
+
+    try:
+        if expected.parent.resolve(strict=True) != expected.parent:
+            raise ResourceAttestationError("PostgreSQL password directory identity invalid")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except ResourceAttestationError:
+        raise
+    except OSError as exc:
+        raise ResourceAttestationError("PostgreSQL password file unavailable") from exc
+
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or
+                stat.S_IMODE(metadata.st_mode) != 0o600 or
+                metadata.st_uid != expected_uid or metadata.st_gid != expected_gid or
+                metadata.st_size != POSTGRES_PASSWORD_LENGTH):
+            raise ResourceAttestationError("PostgreSQL password file metadata invalid")
+        value = os.read(descriptor, POSTGRES_PASSWORD_LENGTH + 1)
+        if len(value) != POSTGRES_PASSWORD_LENGTH:
+            raise ResourceAttestationError("PostgreSQL password file content invalid")
+        try:
+            password = value.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ResourceAttestationError("PostgreSQL password file content invalid") from exc
+        if re.fullmatch(r"[A-Za-z0-9_-]{43}", password) is None:
+            raise ResourceAttestationError("PostgreSQL password file content invalid")
+        return password
+    finally:
+        os.close(descriptor)
 
 
 def validate_image_reference(image: str) -> str:
