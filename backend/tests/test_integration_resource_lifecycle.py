@@ -46,9 +46,11 @@ def raw_observation(value):
         "mount_details": ([{
             "type": "bind", "source": str(value.pgdata_dir),
             "destination": "/var/lib/postgresql/data", "rw": True,
-        }] if value.resource_type == "postgres" else [{
-            "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
-        }]),
+        }] if value.resource_type == "postgres" else []),
+        "host_tmpfs": ({} if value.resource_type == "postgres" else
+                       {"/data": "rw,size=67108864,mode=0700"}),
+        "declared_volumes": ({"/var/lib/postgresql/data": {}} if
+                             value.resource_type == "postgres" else {"/data": {}}),
         "networks": ["bridge"],
     }
 
@@ -123,9 +125,54 @@ def test_redis_accepts_exact_tmpfs_storage_observation(tmp_path):
     value = spec(tmp_path, "redis")
     observed = normalize_docker_observation(raw_observation(value), value)
     assert observed["mount_sources"] == []
-    assert observed["mount_details"] == [{
-        "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
-    }]
+    assert observed["mount_details"] == []
+    assert observed["host_tmpfs"] == {
+        "destination": "/data", "rw": True,
+        "size_bytes": 67108864, "mode": "0700",
+    }
+    assert observed["declared_volumes"] == ["/data"]
+
+
+@pytest.mark.parametrize("host_tmpfs", [
+    {},
+    {"/wrong": "rw,size=67108864,mode=0700"},
+    {"/data": "rw,size=1024,mode=0700"},
+    {"/data": "rw,size=67108864,mode=0755"},
+    {"/data": "ro,size=67108864,mode=0700"},
+    {"/data": "rw,size=67108864,mode=0700,nosuid"},
+    {"/data": "rw,size=67108864,mode=0700", "/other": "rw,size=1,mode=0700"},
+    {"/data": "rw,size=67108864"},
+])
+def test_redis_rejects_invalid_hostconfig_tmpfs(tmp_path, host_tmpfs):
+    value = spec(tmp_path, "redis")
+    raw = raw_observation(value)
+    raw["host_tmpfs"] = host_tmpfs
+    with pytest.raises(ResourceAttestationError, match="HostConfig.Tmpfs"):
+        normalize_docker_observation(raw, value)
+
+
+def test_redis_tmpfs_option_order_is_semantic(tmp_path):
+    value = spec(tmp_path, "redis")
+    raw = raw_observation(value)
+    raw["host_tmpfs"] = {"/data": "mode=0700,rw,size=67108864"}
+    observed = normalize_docker_observation(raw, value)
+    assert observed["host_tmpfs"]["size_bytes"] == 67108864
+
+
+def test_image_declared_volume_is_not_an_attached_mount(tmp_path):
+    value = spec(tmp_path, "redis")
+    raw = raw_observation(value)
+    assert raw["declared_volumes"] == {"/data": {}}
+    assert raw["mount_details"] == []
+    normalize_docker_observation(raw, value)
+
+
+def test_postgres_rejects_hostconfig_tmpfs(tmp_path):
+    value = spec(tmp_path, "postgres")
+    raw = raw_observation(value)
+    raw["host_tmpfs"] = {"/data": "rw,size=67108864,mode=0700"}
+    with pytest.raises(ResourceAttestationError, match="PostgreSQL"):
+        normalize_docker_observation(raw, value)
 
 
 def test_default_service_ports_are_rejected(tmp_path):

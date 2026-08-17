@@ -42,6 +42,25 @@ REDIS_TMPFS_MODE = 0o700
 REDIS_TMPFS_OPTION = (
     f"{REDIS_TMPFS_DESTINATION}:rw,size={REDIS_TMPFS_SIZE_BYTES},mode={REDIS_TMPFS_MODE:04o}"
 )
+REDIS_TMPFS_ATTESTATION = {
+    "destination": REDIS_TMPFS_DESTINATION, "rw": True,
+    "size_bytes": REDIS_TMPFS_SIZE_BYTES, "mode": "0700",
+}
+
+
+def normalize_redis_tmpfs_configuration(value: Any) -> dict[str, object]:
+    if not isinstance(value, Mapping) or set(value) != {REDIS_TMPFS_DESTINATION}:
+        raise ResourceAttestationError("Redis HostConfig.Tmpfs identity mismatch")
+    options = value[REDIS_TMPFS_DESTINATION]
+    if not isinstance(options, str):
+        raise ResourceAttestationError("Redis HostConfig.Tmpfs options invalid")
+    tokens = options.split(",")
+    if len(tokens) != 3 or any(not token for token in tokens) or len(set(tokens)) != 3:
+        raise ResourceAttestationError("Redis HostConfig.Tmpfs options invalid")
+    if set(tokens) != {"rw", "size=67108864", "mode=0700"}:
+        raise ResourceAttestationError("Redis HostConfig.Tmpfs options mismatch")
+    return dict(REDIS_TMPFS_ATTESTATION)
+
 ORCHESTRATION_ORDER = (
     "provision", "observe", "attest", "migrate-postgres",
     "single-integration-file", "verify", "exact-teardown",
@@ -239,7 +258,8 @@ def normalize_docker_observation(raw: Mapping[str, Any],
     required = {
         "container_id", "image_digest", "labels", "container_name", "running",
         "published_host", "published_port", "internal_port", "started_at",
-        "mount_sources", "mount_details", "networks",
+        "mount_sources", "mount_details", "host_tmpfs", "declared_volumes",
+        "networks",
     }
     if set(raw) != required:
         raise ResourceAttestationError("Docker observation schema mismatch")
@@ -255,6 +275,14 @@ def normalize_docker_observation(raw: Mapping[str, Any],
         raise ResourceAttestationError("internal port mismatch")
     mounts = raw["mount_sources"]
     mount_details = raw["mount_details"]
+    host_tmpfs = raw["host_tmpfs"]
+    declared_volumes = raw["declared_volumes"]
+    if declared_volumes is not None and (
+            not isinstance(declared_volumes, Mapping) or
+            any(not isinstance(key, str) or value not in ({}, None)
+                for key, value in declared_volumes.items())):
+        raise ResourceAttestationError("image-declared volume metadata invalid")
+    declared_volume_destinations = sorted((declared_volumes or {}).keys())
     expected_mount = str(spec.pgdata_dir) if spec.resource_type == "postgres" else None
     if not isinstance(mounts, list) or any(
         not isinstance(value, str) or Path(value) != spec.pgdata_dir
@@ -267,12 +295,13 @@ def normalize_docker_observation(raw: Mapping[str, Any],
             "destination": "/var/lib/postgresql/data", "rw": True,
         }]:
             raise ResourceAttestationError("PostgreSQL data mount mismatch")
-    if spec.resource_type == "redis":
-        if mounts != [] or mount_details != [{
-            "type": "tmpfs", "source": "", "destination": REDIS_TMPFS_DESTINATION,
-            "rw": True,
-        }]:
-            raise ResourceAttestationError("Redis tmpfs storage identity mismatch")
+        if host_tmpfs not in (None, {}):
+            raise ResourceAttestationError("PostgreSQL HostConfig.Tmpfs must be empty")
+        normalized_tmpfs = None
+    else:
+        if mounts != [] or mount_details != []:
+            raise ResourceAttestationError("Redis persistent Docker mounts prohibited")
+        normalized_tmpfs = normalize_redis_tmpfs_configuration(host_tmpfs)
     if raw["networks"] != ["bridge"]:
         raise ResourceAttestationError("unexpected Docker network identity")
     try:
@@ -300,6 +329,8 @@ def normalize_docker_observation(raw: Mapping[str, Any],
         "internal_port": raw["internal_port"],
         "mount_sources": mounts,
         "mount_details": mount_details,
+        "host_tmpfs": normalized_tmpfs,
+        "declared_volumes": declared_volume_destinations,
         "networks": raw["networks"],
     }
 

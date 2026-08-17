@@ -33,15 +33,20 @@ def redis_spec(tmp_path):
     )
 
 
-def inspected(value, *, running=True, labels=None):
+def inspected(value, *, running=True, labels=None, mounts=None, host_tmpfs=None):
     values = [CID, "/" + value.container_name, value.image,
               dict(value.labels) if labels is None else labels, running,
               "2026-08-16T00:00:00Z", "bridge",
               {f"{value.internal_port}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(value.port)}]},
-              ([{"Type": "bind", "Source": str(value.pgdata_dir),
-                 "Destination": "/var/lib/postgresql/data", "RW": True}]
-               if value.resource_type == "postgres" else
-               [{"Type": "tmpfs", "Source": "", "Destination": "/data", "RW": True}])]
+              (([{"Type": "bind", "Source": str(value.pgdata_dir),
+                  "Destination": "/var/lib/postgresql/data", "RW": True}]
+                if value.resource_type == "postgres" else [])
+               if mounts is None else mounts),
+              (({} if value.resource_type == "postgres" else
+                {"/data": "rw,size=67108864,mode=0700"})
+               if host_tmpfs is None else host_tmpfs),
+              ({"/var/lib/postgresql/data": {}} if value.resource_type == "postgres"
+               else {"/data": {}})]
     return "\n".join(json.dumps(item) for item in values)
 
 
@@ -114,10 +119,33 @@ def test_redis_volume_observation_never_authorizes_teardown(tmp_path):
             fake.calls.append((tuple(argv), kwargs))
             mounts = [{"Type": "volume", "Source": "anonymous-id",
                        "Destination": "/data", "RW": True}]
-            return CommandResult(0, inspected(value).rsplit("\n", 1)[0] +
-                                 "\n" + json.dumps(mounts))
+            return CommandResult(0, inspected(value, mounts=mounts))
         return original(argv, **kwargs)
     fake.run = volume_instead_of_tmpfs
+    with pytest.raises(Exception):
+        teardown_resource(
+            sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
+            image=value.image, executor=fake, approved_root=tmp_path / "approved")
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+
+
+def test_redis_tmpfs_drift_never_authorizes_teardown(tmp_path):
+    value = redis_spec(tmp_path)
+    create_resource_directories(RUN_ID, "redis", tmp_path / "approved")
+    observation = normalize_docker_observation(
+        parse_restricted_docker_observation(inspected(value), value), value)
+    sentinel = value.temp_dir / "sentinel.json"
+    write_secure_json(sentinel, sentinel_payload(observation),
+                      approved_root=tmp_path / "approved")
+    fake = Fake(value); fake.ss_count = 1
+    original = fake.run
+    def drift(argv, **kwargs):
+        if tuple(argv)[1] == "inspect" and not fake.removed:
+            fake.calls.append((tuple(argv), kwargs))
+            return CommandResult(0, inspected(
+                value, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
+        return original(argv, **kwargs)
+    fake.run = drift
     with pytest.raises(Exception):
         teardown_resource(
             sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",

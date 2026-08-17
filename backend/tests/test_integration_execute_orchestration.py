@@ -58,7 +58,8 @@ def redis_spec(tmp_path: Path):
 
 def inspect_output(spec, *, cid=CID, digest=None, labels=None, host="127.0.0.1",
                    port=None, running=True, name=None, mounts=None,
-                   started="2026-08-16T00:00:00Z"):
+                   started="2026-08-16T00:00:00Z", host_tmpfs=None,
+                   declared_volumes=None):
     reference = spec.image if digest is None else spec.image.split("@", 1)[0] + "@" + digest
     values = [cid, "/" + (name or spec.container_name), reference,
               dict(spec.labels) if labels is None else labels, running,
@@ -68,8 +69,13 @@ def inspect_output(spec, *, cid=CID, digest=None, labels=None, host="127.0.0.1",
               ([{"Type": "bind", "Source": str(spec.pgdata_dir),
                  "Destination": "/var/lib/postgresql/data", "RW": True}]
                if mounts is None and spec.resource_type == "postgres" else
-               ([{"Type": "tmpfs", "Source": "", "Destination": "/data", "RW": True}]
-                if mounts is None else mounts))]
+               ([] if mounts is None else mounts)),
+              (host_tmpfs if host_tmpfs is not None else
+               ({} if spec.resource_type == "postgres" else
+                {"/data": "rw,size=67108864,mode=0700"})),
+              (declared_volumes if declared_volumes is not None else
+               ({"/var/lib/postgresql/data": {}} if spec.resource_type == "postgres"
+                else {"/data": {}}))]
     return "\n".join(json.dumps(value) for value in values)
 
 
@@ -117,7 +123,8 @@ def test_restricted_parser_returns_only_allowlisted_fields(tmp_path):
     assert set(parsed) == {"container_id", "container_name", "image_digest", "labels",
                            "running", "started_at", "networks", "published_host",
                            "published_port", "internal_port", "mount_sources",
-                           "mount_details"}
+                           "mount_details", "host_tmpfs",
+                           "declared_volumes"}
     assert "Env" not in parsed
 
 
@@ -258,6 +265,29 @@ def test_redis_tmpfs_provision_preserves_stability_and_post_sentinel_ready(tmp_p
     assert "STABILITY_OBSERVED" in result["states"]
     assert result["states"][-2:] == ("POST_SENTINEL_OBSERVED", "READY")
     assert inspect_count >= 2
+
+
+def test_redis_stability_rejects_hostconfig_tmpfs_drift(tmp_path):
+    spec = redis_spec(tmp_path)
+    baseline = parse_restricted_docker_observation(inspect_output(spec), spec)
+    calls = 0
+    def handler(argv, kwargs, _count):
+        nonlocal calls
+        if argv[0].endswith("/ss"):
+            return CommandResult(0, f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*\n")
+        if argv[0].endswith("/lsof"):
+            return CommandResult(0, f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)")
+        if argv[1] == "inspect":
+            calls += 1
+            return CommandResult(0, inspect_output(
+                spec, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
+        raise AssertionError(argv)
+    clock = FakeClock()
+    with pytest.raises(OrchestrationError):
+        observe_lifecycle_stability(
+            FakeExecutor(handler), spec, CID, baseline, window=1.0, interval=0.5,
+            monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert calls >= 1
 
 
 def test_successful_provision_orders_attestation_before_sentinel(tmp_path):
@@ -615,6 +645,39 @@ def test_post_sentinel_exit_never_returns_ready(tmp_path, monkeypatch):
                            secret_factory=lambda: SYNTHETIC_SECRET,
                            stability_window=1.0, stability_interval=0.5,
                            monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert sentinel_written
+
+
+def test_redis_post_sentinel_tmpfs_drift_never_returns_ready(tmp_path, monkeypatch):
+    spec = redis_spec(tmp_path)
+    listener_count = 0
+    sentinel_written = False
+    real_write = flows.write_secure_json
+    def tracked_write(path, payload, **kwargs):
+        nonlocal sentinel_written
+        real_write(path, payload, **kwargs)
+        if path.name == "sentinel.json":
+            sentinel_written = True
+    def handler(argv, kwargs, _count):
+        nonlocal listener_count
+        if argv[1:3] == ("ps", "-a"): return CommandResult(0, "")
+        if argv[0].endswith("/ss"):
+            listener_count += 1
+            return CommandResult(0, "" if listener_count == 1 else
+                                 f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*\n")
+        if argv[0].endswith("/lsof"):
+            return CommandResult(1 if listener_count == 1 else 0, "" if listener_count == 1 else
+                                 f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)")
+        if argv == spec.argv: return CommandResult(0, CID + "\n")
+        if argv[1] == "start": return CommandResult(0, CID + "\n")
+        if argv[1] == "inspect":
+            config = ({"/data": "rw,size=1024,mode=0700"} if sentinel_written else None)
+            return CommandResult(0, inspect_output(spec, host_tmpfs=config))
+        raise AssertionError(argv)
+    monkeypatch.setattr(flows, "write_secure_json", tracked_write)
+    with pytest.raises(OrchestrationError):
+        provision_fast(spec, executor=FakeExecutor(handler),
+                       approved_root=tmp_path / "approved")
     assert sentinel_written
 
 

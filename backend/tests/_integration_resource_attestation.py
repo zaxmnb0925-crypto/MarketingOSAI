@@ -29,7 +29,8 @@ SENTINEL_KEYS = {
 }
 OBSERVATION_KEYS = SENTINEL_KEYS | {
     "listener_host", "listener_port", "docker_labels", "container_name",
-    "running", "internal_port", "mount_sources", "mount_details", "networks",
+    "running", "internal_port", "mount_sources", "mount_details",
+    "host_tmpfs", "declared_volumes", "networks",
 }
 
 
@@ -171,16 +172,22 @@ def validate_runtime_observation(attestation: ResourceAttestation,
         _fail("container internal port mismatch")
     mounts = data["mount_sources"]
     mount_details = data["mount_details"]
+    host_tmpfs = data["host_tmpfs"]
+    declared_volumes = data["declared_volumes"]
+    if (not isinstance(declared_volumes, list) or
+            any(not isinstance(value, str) for value in declared_volumes)):
+        _fail("image-declared volume metadata invalid")
     if attestation.resource_type == "postgres":
         source = str(attestation.resource_temp_dir / "data")
         if mounts != [source] or mount_details != [{
             "type": "bind", "source": source,
             "destination": "/var/lib/postgresql/data", "rw": True,
-        }]:
+        }] or host_tmpfs is not None:
             _fail("PostgreSQL mount identity mismatch")
-    elif mounts != [] or mount_details != [{
-        "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
-    }]:
+    elif (mounts != [] or mount_details != [] or host_tmpfs != {
+            "destination": "/data", "rw": True,
+            "size_bytes": 67108864, "mode": "0700",
+    }):
         _fail("Redis tmpfs storage identity mismatch")
     if data["networks"] != ["bridge"]:
         _fail("Docker network identity mismatch")

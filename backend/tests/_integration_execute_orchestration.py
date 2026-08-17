@@ -165,18 +165,18 @@ def _inspect_argv(container_id: str) -> tuple[str, ...]:
     fields = ("{{json .Id}}", "{{json .Name}}", "{{json .Config.Image}}",
               "{{json .Config.Labels}}", "{{json .State.Running}}",
               "{{json .State.StartedAt}}", "{{json .HostConfig.NetworkMode}}",
-              "{{json .NetworkSettings.Ports}}", "{{json .Mounts}}")
+              "{{json .NetworkSettings.Ports}}", "{{json .Mounts}}",
+              "{{json .HostConfig.Tmpfs}}", "{{json .Config.Volumes}}")
     return (DOCKER, "inspect", "--type", "container", "--format", "\n".join(fields), container_id)
 
 
 def parse_restricted_docker_observation(output: str, spec: DockerResourceSpec) -> dict[str, object]:
     lines = output.splitlines()
-    if len(lines) != 9:
+    if len(lines) != 11:
         raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED)
     try:
-        cid, name, image, labels, running, started, network, ports, mounts = (
-            json.loads(line) for line in lines
-        )
+        (cid, name, image, labels, running, started, network, ports, mounts,
+         host_tmpfs, declared_volumes) = (json.loads(line) for line in lines)
         binding = ports[f"{spec.internal_port}/tcp"]
         if not isinstance(binding, list) or len(binding) != 1:
             raise ValueError
@@ -193,7 +193,8 @@ def parse_restricted_docker_observation(output: str, spec: DockerResourceSpec) -
             "published_host": binding[0]["HostIp"],
             "published_port": int(binding[0]["HostPort"]),
             "internal_port": spec.internal_port, "mount_sources": sources,
-            "mount_details": mount_details}
+            "mount_details": mount_details, "host_tmpfs": host_tmpfs,
+            "declared_volumes": declared_volumes}
 
 
 def collect_docker_observation(executor: CommandExecutor, spec: DockerResourceSpec,
@@ -212,11 +213,15 @@ def validate_provisional_observation(raw: Mapping[str, object], spec: DockerReso
                 "mount_details": ([{
                     "type": "bind", "source": str(spec.pgdata_dir),
                     "destination": "/var/lib/postgresql/data", "rw": True,
-                }] if spec.resource_type == "postgres" else [{
-                    "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
-                }])}
+                }] if spec.resource_type == "postgres" else []),}
     if any(raw.get(key) != value for key, value in expected.items()):
         raise OrchestrationError(FailureClass.RESOURCE_IDENTITY_MISMATCH)
+    try:
+        normalization_candidate = dict(raw)
+        normalization_candidate["running"] = True
+        normalize_docker_observation(normalization_candidate, spec)
+    except Exception:
+        raise OrchestrationError(FailureClass.RESOURCE_IDENTITY_MISMATCH) from None
 
 
 def observe_lifecycle_stability(

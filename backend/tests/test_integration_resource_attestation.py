@@ -49,9 +49,13 @@ def evidence(tmp_path: Path, kind: str):
         "mount_details": ([{
             "type": "bind", "source": str(resource_dir / "data"),
             "destination": "/var/lib/postgresql/data", "rw": True,
-        }] if kind == "postgres" else [{
-            "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
-        }]),
+        }] if kind == "postgres" else []),
+        "host_tmpfs": (None if kind == "postgres" else {
+            "destination": "/data", "rw": True,
+            "size_bytes": 67108864, "mode": "0700",
+        }),
+        "declared_volumes": (["/var/lib/postgresql/data"] if
+                             kind == "postgres" else ["/data"]),
         "networks": ["bridge"],
         "docker_labels": {
             DOCKER_LABELS["test"]: "true", DOCKER_LABELS["run"]: RUN_ID,

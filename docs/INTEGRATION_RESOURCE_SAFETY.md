@@ -81,11 +81,23 @@ read-write tmpfs is container-lifetime storage: no bind source, named volume,
 anonymous volume, or persistent host data path is authorized. RDB and AOF
 remain disabled.
 
-Restricted runtime observations retain mount type, source, destination, and
-read/write state. Redis accepts only the exact tmpfs identity above; a volume,
-bind, wrong destination, duplicate, or additional mount fails closed and is
-preserved for forensic review. Normal teardown repeats this fresh storage
-attestation before exact-ID stop/remove and never prunes Docker volumes.
+The evidence model distinguishes three Docker inspection surfaces. The image's
+`Config.Volumes={"/data":{}}` is declaration metadata only; it is not evidence
+that an attached Docker volume exists. For a container created with `--tmpfs`,
+the observed engine reports `.Mounts=[]`, while `HostConfig.Tmpfs` is the
+authoritative configured-storage surface. Redis therefore requires exactly one
+`/data` entry whose option set is semantically exactly `rw`, `size=67108864`,
+and `mode=0700`. Option ordering is immaterial, but missing, duplicated,
+unknown, or additional options and destinations fail closed. Any bind, named
+volume, anonymous volume, or other row in `.Mounts` also fails closed.
+
+Forensic inspection of the container's `/proc/.../mountinfo` confirmed that
+`/data` is a runtime tmpfs. The normal lifecycle deliberately does not add a
+mountinfo dependency: entering or inspecting container process namespaces
+would add privilege and operational complexity. Instead, readiness, stability,
+and teardown consistently re-attest the reviewed `HostConfig.Tmpfs`, `.Mounts`,
+and `Config.Volumes` surfaces. Normal teardown performs this fresh attestation
+before exact-ID stop/remove and never prunes Docker volumes.
 
 Redis lifecycle `READY` means `RESOURCE_LIFECYCLE_STABLE`; it does not mean
 `REDIS_APPLICATION_READINESS_PROVEN`. No `redis-cli`, `PING`, `FLUSHALL`,
