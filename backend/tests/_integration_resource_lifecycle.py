@@ -26,6 +26,7 @@ from _integration_resource_attestation import (
     ResourceAttestation,
     ResourceAttestationError,
     authorize_destructive_cleanup,
+    lifecycle_operator_identity,
     load_sentinel,
     validate_operator_owned_metadata,
     reconstruct_database_url,
@@ -153,6 +154,32 @@ def resource_temp_dir(run_id: str, resource_type: str,
     repository = Path(__file__).resolve().parents[2]
     if repository == candidate or repository in candidate.parents:
         raise ResourceAttestationError("resource directory must be outside repository")
+    return candidate
+
+
+def run_temp_dir(run_id: str,
+                 approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
+    """Derive the exact run directory without accepting a caller-supplied path."""
+    validate_run_id(run_id)
+    if not approved_root.is_absolute() or approved_root == Path("/tmp"):
+        raise ResourceAttestationError("approved root invalid")
+    if Path("/tmp") not in approved_root.parents:
+        raise ResourceAttestationError("approved root must be strictly below /tmp")
+    if approved_root.exists() and approved_root.is_symlink():
+        raise ResourceAttestationError("approved root must not be a symlink")
+    current = Path("/tmp")
+    for component in approved_root.relative_to(Path("/tmp")).parts:
+        current = current / component
+        if current.exists() and current.is_symlink():
+            raise ResourceAttestationError("approved root contains symlink traversal")
+    if (approved_root.exists() and
+            Path("/tmp").resolve(strict=True) not in approved_root.resolve(strict=True).parents):
+        raise ResourceAttestationError("approved root canonical path escaped /tmp")
+    candidate = approved_root / run_id
+    repository = Path(__file__).resolve().parents[2]
+    if (repository == candidate or repository in candidate.parents or
+            candidate in repository.parents):
+        raise ResourceAttestationError("run directory must be outside repository")
     return candidate
 
 
@@ -429,6 +456,38 @@ def validate_cleanup_path(path: Path, *, run_id: str, resource_type: str,
     repository = Path(__file__).resolve().parents[2]
     if canonical == repository or repository in canonical.parents:
         raise ResourceAttestationError("cleanup path must be outside repository")
+    return canonical
+
+
+def validate_run_cleanup_path(path: Path, *, run_id: str,
+                              approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
+    """Fail closed unless path is the exact operator-owned run directory."""
+    expected = run_temp_dir(run_id, approved_root)
+    expected_uid, expected_gid = lifecycle_operator_identity()
+    try:
+        root_metadata = approved_root.lstat()
+        path_metadata = path.lstat()
+        canonical_root = approved_root.resolve(strict=True)
+        canonical = path.resolve(strict=True)
+        expected_canonical = expected.resolve(strict=True)
+    except OSError as exc:
+        raise ResourceAttestationError("run cleanup path unavailable") from exc
+    if (not stat.S_ISDIR(root_metadata.st_mode) or approved_root.is_symlink() or
+            stat.S_IMODE(root_metadata.st_mode) != 0o700 or
+            root_metadata.st_uid != expected_uid or root_metadata.st_gid != expected_gid):
+        raise ResourceAttestationError("approved root identity mismatch")
+    if (not stat.S_ISDIR(path_metadata.st_mode) or path.is_symlink() or
+            stat.S_IMODE(path_metadata.st_mode) != 0o700 or
+            path_metadata.st_uid != expected_uid or path_metadata.st_gid != expected_gid):
+        raise ResourceAttestationError("run cleanup metadata mismatch")
+    if canonical != expected_canonical or canonical.parent != canonical_root:
+        raise ResourceAttestationError("run cleanup path identity mismatch")
+    if canonical in {Path("/"), Path("/tmp"), canonical_root}:
+        raise ResourceAttestationError("run cleanup path is too broad")
+    repository = Path(__file__).resolve().parents[2]
+    if (canonical == repository or repository in canonical.parents or
+            canonical in repository.parents):
+        raise ResourceAttestationError("run cleanup path overlaps repository")
     return canonical
 
 

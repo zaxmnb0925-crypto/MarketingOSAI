@@ -9,11 +9,13 @@ import pytest
 import _integration_execute_flows as flows
 import _integration_resource_attestation as attestation
 from _integration_docker_command import docker_subcommand
-from _integration_execute_flows import provision_resource, teardown_resource
+from _integration_execute_flows import (
+    provision_resource, remove_empty_run_directory, teardown_resource,
+)
 from _integration_execute_orchestration import CommandResult, FailureClass, OrchestrationError
 from _integration_resource_lifecycle import (
     build_docker_spec, create_resource_directories, normalize_docker_observation,
-    sentinel_payload, write_secure_json,
+    run_temp_dir, sentinel_payload, validate_run_cleanup_path, write_secure_json,
 )
 from _integration_execute_orchestration import parse_restricted_docker_observation
 
@@ -278,9 +280,124 @@ def test_teardown_uses_fresh_observation_exact_id_and_closes_port(tmp_path):
     result = teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
                                resource_type="postgres", image=IMAGE,
                                executor=fake, approved_root=tmp_path / "approved")
-    assert result == {"state": "COMPLETE", "container_id": CID, "path_absent": True}
+    assert result == {
+        "state": "COMPLETE", "container_id": CID,
+        "resource_path_absent": True, "run_directory_absent": True,
+        "run_directory_retained_for_sibling": False,
+    }
+    assert (tmp_path / "approved").is_dir()
+    assert not run_temp_dir(RUN_ID, tmp_path / "approved").exists()
     assert [argv[3:] for argv, _ in fake.calls if docker_subcommand(argv) in {"stop", "rm"}] == [("stop", CID), ("rm", CID)]
     assert fake.ss_count == 3
+
+
+def test_redis_teardown_removes_empty_run_directory_and_preserves_root(tmp_path):
+    value = redis_spec(tmp_path)
+    root = tmp_path / "approved"
+    create_resource_directories(RUN_ID, "redis", root)
+    observation = normalize_docker_observation(
+        parse_restricted_docker_observation(inspected(value), value), value)
+    sentinel = value.temp_dir / "sentinel.json"
+    write_secure_json(sentinel, sentinel_payload(observation), approved_root=root)
+    fake = Fake(value); fake.ss_count = 1
+    result = teardown_resource(
+        sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
+        image=value.image, executor=fake, approved_root=root)
+    assert root.is_dir()
+    assert not run_temp_dir(RUN_ID, root).exists()
+    assert not value.temp_dir.exists() and not sentinel.exists()
+    assert result["resource_path_absent"] is True
+    assert result["run_directory_absent"] is True
+    assert result["run_directory_retained_for_sibling"] is False
+
+
+def test_same_run_sibling_teardown_reports_parent_retained(tmp_path):
+    root = tmp_path / "approved"
+    value = redis_spec(tmp_path)
+    create_resource_directories(RUN_ID, "redis", root)
+    postgres = create_resource_directories(RUN_ID, "postgres", root)
+    observation = normalize_docker_observation(
+        parse_restricted_docker_observation(inspected(value), value), value)
+    sentinel = value.temp_dir / "sentinel.json"
+    write_secure_json(sentinel, sentinel_payload(observation), approved_root=root)
+    fake = Fake(value); fake.ss_count = 1
+    result = teardown_resource(
+        sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
+        image=value.image, executor=fake, approved_root=root)
+    assert result["state"] == "COMPLETE"
+    assert result["resource_path_absent"] is True
+    assert result["run_directory_absent"] is False
+    assert result["run_directory_retained_for_sibling"] is True
+    assert postgres.is_dir() and postgres.parent.is_dir() and root.is_dir()
+
+
+def test_empty_run_directory_exact_rmdir_regression(tmp_path):
+    root = tmp_path / "approved"
+    resource = create_resource_directories(RUN_ID, "redis", root)
+    run_directory = resource.parent
+    resource.rmdir()
+    assert run_directory.is_dir()
+    assert remove_empty_run_directory(
+        run_id=RUN_ID, resource_type="redis", approved_root=root) is True
+    assert root.is_dir() and not run_directory.exists()
+
+
+def test_expected_same_run_sibling_is_retained_without_failure(tmp_path):
+    root = tmp_path / "approved"
+    redis = create_resource_directories(RUN_ID, "redis", root)
+    postgres = create_resource_directories(RUN_ID, "postgres", root)
+    (postgres / "data").rmdir()
+    redis.rmdir()
+    assert remove_empty_run_directory(
+        run_id=RUN_ID, resource_type="redis", approved_root=root) is False
+    assert postgres.is_dir() and postgres.parent.is_dir()
+
+
+def test_unexpected_run_content_fails_closed_and_is_preserved(tmp_path):
+    root = tmp_path / "approved"
+    resource = create_resource_directories(RUN_ID, "redis", root)
+    run_directory = resource.parent
+    resource.rmdir()
+    unexpected = run_directory / "forensic-evidence"
+    unexpected.write_text("preserve")
+    with pytest.raises(OrchestrationError) as error:
+        remove_empty_run_directory(
+            run_id=RUN_ID, resource_type="redis", approved_root=root)
+    assert error.value.category is FailureClass.TEARDOWN_EXECUTION_FAILED
+    assert unexpected.read_text() == "preserve" and run_directory.is_dir()
+
+
+@pytest.mark.parametrize("drift", ["mode", "uid", "gid"])
+def test_run_directory_metadata_drift_is_rejected(tmp_path, monkeypatch, drift):
+    root = tmp_path / "approved"
+    resource = create_resource_directories(RUN_ID, "redis", root)
+    run_directory = resource.parent
+    if drift == "mode":
+        run_directory.chmod(0o755)
+    else:
+        uid, gid = attestation.lifecycle_operator_identity()
+        monkeypatch.setattr(
+            "_integration_resource_lifecycle.lifecycle_operator_identity",
+            lambda: (uid + (drift == "uid"), gid + (drift == "gid")),
+        )
+    with pytest.raises(attestation.ResourceAttestationError):
+        validate_run_cleanup_path(run_directory, run_id=RUN_ID, approved_root=root)
+    assert run_directory.exists()
+
+
+def test_run_directory_symlink_and_wrong_parent_are_rejected(tmp_path):
+    root = tmp_path / "approved"
+    resource = create_resource_directories(RUN_ID, "redis", root)
+    run_directory = resource.parent
+    outside = tmp_path / "outside"; outside.mkdir(mode=0o700)
+    link = root / "r22-fedcba9876543210"; link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(attestation.ResourceAttestationError):
+        validate_run_cleanup_path(link, run_id="r22-fedcba9876543210", approved_root=root)
+    with pytest.raises(attestation.ResourceAttestationError):
+        validate_run_cleanup_path(outside, run_id=RUN_ID, approved_root=root)
+    with pytest.raises(attestation.ResourceAttestationError):
+        validate_run_cleanup_path(root, run_id=RUN_ID, approved_root=root)
+    assert run_directory.exists() and outside.exists()
 
 
 def test_teardown_open_port_fails_after_exact_container_removal(tmp_path):

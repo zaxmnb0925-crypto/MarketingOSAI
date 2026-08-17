@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import stat
 import sys
 import time
 from typing import Callable
@@ -25,7 +26,8 @@ from _integration_resource_lifecycle import (
     DockerResourceSpec, build_docker_spec, create_resource_directories,
     normalize_docker_observation, sanitized_subprocess_environment,
     require_empty_postgres_data_dir,
-    sentinel_payload, validate_cleanup_path, write_secure_json,
+    run_temp_dir, sentinel_payload, validate_cleanup_path,
+    validate_run_cleanup_path, write_secure_json,
 )
 
 
@@ -189,6 +191,29 @@ def remove_exact_temp_path(path: Path, *, run_id: str, resource_type: str,
     exact.rmdir()
 
 
+def remove_empty_run_directory(*, run_id: str, resource_type: str,
+                               approved_root: Path = APPROVED_TEMP_ROOT) -> bool:
+    """Remove an empty exact run directory, or retain a valid resource sibling."""
+    run_directory = validate_run_cleanup_path(
+        run_temp_dir(run_id, approved_root), run_id=run_id,
+        approved_root=approved_root,
+    )
+    entries = list(os.scandir(run_directory))
+    if not entries:
+        run_directory.rmdir()
+        return True
+    expected_siblings = {"postgres", "redis"} - {resource_type}
+    expected_uid, expected_gid = os.geteuid(), os.getegid()
+    for entry in entries:
+        metadata = entry.stat(follow_symlinks=False)
+        if (entry.name not in expected_siblings or entry.is_symlink() or
+                not entry.is_dir(follow_symlinks=False) or
+                stat.S_IMODE(metadata.st_mode) != 0o700 or
+                metadata.st_uid != expected_uid or metadata.st_gid != expected_gid):
+            raise OrchestrationError(FailureClass.TEARDOWN_EXECUTION_FAILED)
+    return False
+
+
 def teardown_resource(*, sentinel_path: Path, run_id: str, resource_type: str,
                       image: str, executor: CommandExecutor,
                       approved_root: Path = APPROVED_TEMP_ROOT) -> dict[str, object]:
@@ -217,12 +242,23 @@ def teardown_resource(*, sentinel_path: Path, run_id: str, resource_type: str,
         require_port_free(observe_listener(executor, spec.port))
         remove_exact_temp_path(spec.temp_dir, run_id=run_id,
                                resource_type=resource_type, approved_root=approved_root)
+        run_directory_absent = remove_empty_run_directory(
+            run_id=run_id, resource_type=resource_type,
+            approved_root=approved_root,
+        )
     except OrchestrationError:
         raise
     except Exception:
         raise OrchestrationError(FailureClass.TEARDOWN_EXECUTION_FAILED) from None
-    return {"state": "COMPLETE", "container_id": exact,
-            "path_absent": not spec.temp_dir.exists()}
+    resource_path_absent = not spec.temp_dir.exists()
+    if not resource_path_absent:
+        raise OrchestrationError(FailureClass.TEARDOWN_EXECUTION_FAILED)
+    return {
+        "state": "COMPLETE", "container_id": exact,
+        "resource_path_absent": resource_path_absent,
+        "run_directory_absent": run_directory_absent,
+        "run_directory_retained_for_sibling": not run_directory_absent,
+    }
 
 
 def assert_same_run_resources(postgres_run_id: str, redis_run_id: str | None,
