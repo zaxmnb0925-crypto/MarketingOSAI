@@ -42,3 +42,55 @@ B5E candidate inputs were resolved on 2026-08-16 for linux/amd64 and have not be
 ## Operator manifest invalidation
 
 Operator lifecycle manifests are single-source-state review artifacts. Any HEAD, tree, working-tree, or participating source-hash mismatch makes the manifest `STALE_DO_NOT_EXECUTE`; it must not be updated in place or executed. The B5I manifest for run `r22-0a185d9a8efd9241` became stale when B5J lifecycle sources changed and must be regenerated only in a separately approved round.
+
+## Dedicated PostgreSQL data layout and lifecycle stability
+
+For every new PostgreSQL lifecycle, the resource root is
+`/tmp/marketingos-integration-resources/<run-id>/postgres/`; lifecycle metadata
+(`observation.json`, `sentinel.json`, and their atomic-write temporary files)
+stays in that root. The only bind source permitted for container destination
+`/var/lib/postgresql/data` is the dedicated `postgres/data/` child. Immediately
+before Docker create, that exact child must be a non-symlink directory beneath
+the validated resource root and contain no entries, including hidden entries.
+Unexpected contents are preserved and fail closed as `PGDATA_NOT_EMPTY`.
+
+Provisioning requires a two-second monotonic stability window, polled every
+0.5 seconds. Every fresh restricted observation must retain exact container ID,
+name, immutable digest, ownership labels, run ID, resource type, StartedAt,
+running state, loopback listener, ports, mount, and network. Tests inject a fake
+clock and sleeper. After the sentinel atomic rename, one more fresh restricted
+observation and listener attestation is mandatory before `READY`.
+
+`READY` means `RESOURCE_LIFECYCLE_STABLE`; it does not mean
+`POSTGRESQL_APPLICATION_READINESS_PROVEN`. This lifecycle gate performs no
+`psql`, authenticated SQL query, or `docker exec`. Application readiness needs
+a separately reviewed design.
+
+Normal teardown remains exact-ID and fresh-observation based. It requires the
+owned container to be running and its expected listener to be present. It does
+not accept an exited container or a closed expected port.
+
+### Operator sentinel metadata contract
+
+When root-owned mode-0700 parents prevent nonprivileged traversal, future
+operator materialization must inspect only the exact sentinel metadata using a
+separately approved command semantically equivalent to
+`sudo -- /usr/bin/stat -Lc '%F %a %U %G' <exact-sentinel-path>`. Authorization
+requires a regular, non-symlink, root-owned mode-0600 file. Never display its
+contents and never work around visibility with permission, ownership, group, or
+ACL widening.
+
+### Preserved legacy resource recovery specification (design only)
+
+The failed legacy run `r22-06ec72c39b79fc04` is not reinterpreted or migrated
+to the new layout. No `data/` child may be created beneath it. Recovery remains
+unauthorized until a separate human-approved procedure freshly proves all of:
+exact CID `d2b972008bc3cd6b6d0c22287a44438dc6541f2e34811edb8ff6f0ba1f362047`;
+exact name `marketingos-r22-06ec72c39b79fc04-postgres`; exact run ID and
+`test-resource=true`, resource type `postgres`; image digest
+`sha256:075f7ba66bc9b3ce7d6b8b635208ff61cd7cf1a67d71ec530eec5d7ae0cbe571`;
+state exited; port 55432 closed; exact regular root-owned mode-0600 sentinel;
+legacy mount source equal to the resource root and destination
+`/var/lib/postgresql/data`; and only expected non-Production network semantics.
+Any recovery must be exact-ID only: no fuzzy/name-only deletion, prune,
+Production resource access, or arbitrary-path deletion.

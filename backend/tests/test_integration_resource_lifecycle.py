@@ -13,7 +13,8 @@ from _integration_resource_attestation import (
 from _integration_resource_lifecycle import (
     ORCHESTRATION_ORDER, authorize_migration, authorize_teardown,
     build_docker_spec, create_resource_directories, generate_run_id,
-    normalize_docker_observation, resource_temp_dir, sentinel_payload,
+    normalize_docker_observation, postgres_data_dir, require_empty_postgres_data_dir,
+    resource_temp_dir, sentinel_payload,
     sanitized_subprocess_environment, validate_cleanup_path, validate_image_reference, validate_run_id, write_secure_json,
 )
 
@@ -41,7 +42,7 @@ def raw_observation(value):
         "published_port": value.port,
         "internal_port": value.internal_port,
         "started_at": "2026-08-16T00:00:00Z",
-        "mount_sources": [str(value.temp_dir)] if value.resource_type == "postgres" else [],
+        "mount_sources": [str(value.pgdata_dir)] if value.resource_type == "postgres" else [],
         "networks": ["bridge"],
     }
 
@@ -266,3 +267,72 @@ def test_inherited_resource_urls_are_discarded_by_integration_entrypoint():
     root = Path(__file__).resolve().parents[2]
     runner = (root / "scripts/run_backend_integration_cleanroom.sh").read_text()
     assert "unset DATABASE_URL REDIS_URL" in runner
+
+def test_postgres_resource_root_and_pgdata_are_physically_separate(tmp_path):
+    value = spec(tmp_path)
+    root = create_resource_directories(RUN_ID, "postgres", tmp_path / "approved")
+    assert value.temp_dir == root
+    assert value.pgdata_dir == root / "data" == postgres_data_dir(
+        RUN_ID, approved_root=tmp_path / "approved")
+    assert value.temp_dir != value.pgdata_dir
+    assert require_empty_postgres_data_dir(value) == value.pgdata_dir
+    mount = f"type=bind,src={value.pgdata_dir},dst=/var/lib/postgresql/data"
+    assert mount in value.argv
+    assert f"type=bind,src={value.temp_dir},dst=/var/lib/postgresql/data" not in value.argv
+
+
+@pytest.mark.parametrize("child_kind", ["hidden", "directory"])
+def test_pgdata_nonempty_including_hidden_entries_fails_closed(tmp_path, child_kind):
+    value = spec(tmp_path)
+    create_resource_directories(RUN_ID, "postgres", tmp_path / "approved")
+    child = value.pgdata_dir / (".hidden" if child_kind == "hidden" else "child")
+    child.write_text("synthetic") if child_kind == "hidden" else child.mkdir()
+    with pytest.raises(ResourceAttestationError, match="PGDATA_NOT_EMPTY"):
+        require_empty_postgres_data_dir(value)
+
+
+def test_symlink_pgdata_fails_closed(tmp_path):
+    value = spec(tmp_path)
+    create_resource_directories(RUN_ID, "postgres", tmp_path / "approved")
+    value.pgdata_dir.rmdir()
+    outside = tmp_path / "outside-data"; outside.mkdir()
+    value.pgdata_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ResourceAttestationError, match="symlink"):
+        require_empty_postgres_data_dir(value)
+
+
+@pytest.mark.parametrize("source", ["resource-root", "sibling", "production"])
+def test_unexpected_postgres_mount_sources_fail_closed(tmp_path, source):
+    value = spec(tmp_path)
+    candidate = {"resource-root": value.temp_dir,
+                 "sibling": value.temp_dir.parent / "sibling",
+                 "production": Path("/opt/MarketingOSAI")}[source]
+    raw = raw_observation(value); raw["mount_sources"] = [str(candidate)]
+    with pytest.raises(ResourceAttestationError):
+        normalize_docker_observation(raw, value)
+
+
+def test_metadata_and_atomic_temporary_files_remain_outside_pgdata(tmp_path):
+    root = tmp_path / "approved"
+    value = spec(tmp_path); create_resource_directories(RUN_ID, "postgres", root)
+    payload = {"resource_run_id": RUN_ID, "resource_type": "postgres", "value": "safe"}
+    write_secure_json(value.temp_dir / "observation.json", payload, approved_root=root)
+    assert (value.temp_dir / "observation.json").is_file()
+    assert list(value.pgdata_dir.iterdir()) == []
+    with pytest.raises(ResourceAttestationError):
+        write_secure_json(value.pgdata_dir / "diagnostic.json", payload, approved_root=root)
+    source = Path(__file__).with_name("_integration_resource_lifecycle.py").read_text()
+    assert 'temporary = path.parent / f".{path.name}.' in source
+
+
+def test_pgdata_empty_gate_precedes_docker_create_in_source():
+    source = Path(__file__).with_name("_integration_execute_flows.py").read_text()
+    assert source.index("require_empty_postgres_data_dir(spec)") < source.index("executor.run(spec.argv")
+
+
+def test_operator_sentinel_contract_is_privileged_metadata_only():
+    policy = (Path(__file__).resolve().parents[2] / "docs/INTEGRATION_RESOURCE_SAFETY.md").read_text()
+    assert "sudo -- /usr/bin/stat -Lc" in policy
+    operator = policy.split("Operator sentinel metadata contract", 1)[1]
+    assert "chmod 755" not in operator and "chmod 777" not in operator
+    assert "chown cbemsadmin" not in operator and "cat sentinel" not in operator

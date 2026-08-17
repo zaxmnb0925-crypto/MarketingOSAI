@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import sys
 from typing import Mapping, Protocol, Sequence
 
@@ -47,6 +48,8 @@ class FailureClass(str, Enum):
     SECRET_GENERATION_FAILED = "SECRET_GENERATION_FAILED"
     MIGRATION_AUTHORIZATION_FAILED = "MIGRATION_AUTHORIZATION_FAILED"
     MIGRATION_EXECUTION_FAILED = "MIGRATION_EXECUTION_FAILED"
+    LIFECYCLE_STABILITY_FAILED = "LIFECYCLE_STABILITY_FAILED"
+    PGDATA_NOT_EMPTY = "PGDATA_NOT_EMPTY"
     TEARDOWN_AUTHORIZATION_FAILED = "TEARDOWN_AUTHORIZATION_FAILED"
     TEARDOWN_EXECUTION_FAILED = "TEARDOWN_EXECUTION_FAILED"
 
@@ -200,9 +203,43 @@ def validate_provisional_observation(raw: Mapping[str, object], spec: DockerReso
                 "image_digest": spec.image_digest, "labels": dict(spec.labels),
                 "published_host": "127.0.0.1", "published_port": spec.port,
                 "internal_port": spec.internal_port, "networks": ["bridge"],
-                "mount_sources": [str(spec.temp_dir)] if spec.resource_type == "postgres" else []}
+                "mount_sources": [str(spec.pgdata_dir)] if spec.resource_type == "postgres" else []}
     if any(raw.get(key) != value for key, value in expected.items()):
         raise OrchestrationError(FailureClass.RESOURCE_IDENTITY_MISMATCH)
+
+
+def observe_lifecycle_stability(
+    executor: CommandExecutor, spec: DockerResourceSpec, container_id: str,
+    baseline: Mapping[str, object], *, window: float = 2.0, interval: float = 0.5,
+    monotonic=time.monotonic, sleeper=time.sleep,
+) -> dict[str, object]:
+    """Require exact identity and listener throughout a bounded stability window.
+
+    This detects immediate-exit races. It does not claim PostgreSQL application
+    readiness and deliberately performs no database query or docker exec.
+    """
+    if window <= 0 or interval <= 0 or interval > window:
+        raise OrchestrationError(FailureClass.LIFECYCLE_STABILITY_FAILED)
+    deadline = monotonic() + window
+    expected_start = baseline.get("started_at")
+    latest = dict(baseline)
+    attempts = 0
+    max_attempts = int(window / interval) + 2
+    while True:
+        if (latest.get("started_at") != expected_start or
+                latest.get("running") is not True):
+            raise OrchestrationError(FailureClass.LIFECYCLE_STABILITY_FAILED)
+        validate_provisional_observation(latest, spec, container_id)
+        normalize_docker_observation(latest, spec)
+        require_loopback_listener(observe_listener(executor, spec.port))
+        attempts += 1
+        now = monotonic()
+        if now >= deadline:
+            return latest
+        if attempts >= max_attempts:
+            raise OrchestrationError(FailureClass.LIFECYCLE_STABILITY_FAILED)
+        sleeper(min(interval, deadline - now))
+        latest = collect_docker_observation(executor, spec, container_id)
 
 
 def observe_listener(executor: CommandExecutor, port: int) -> ListenerObservation:

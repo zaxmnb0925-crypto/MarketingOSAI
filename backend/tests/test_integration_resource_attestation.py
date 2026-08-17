@@ -24,6 +24,8 @@ def evidence(tmp_path: Path, kind: str):
     resource_dir.mkdir(parents=True, mode=0o700)
     (root / RUN_ID).chmod(0o700)
     resource_dir.chmod(0o700)
+    if kind == "postgres":
+        (resource_dir / "data").mkdir(mode=0o700)
     common = {
         "resource_run_id": RUN_ID, "resource_type": kind,
         "resource_container_id": CONTAINER_ID, "resource_pid": None,
@@ -43,7 +45,7 @@ def evidence(tmp_path: Path, kind: str):
         "listener_host": "127.0.0.1", "listener_port": common["resource_port"],
         "container_name": f"marketingos-{RUN_ID}-{kind}", "running": True,
         "internal_port": 5432 if kind == "postgres" else 6379,
-        "mount_sources": [str(resource_dir)] if kind == "postgres" else [],
+        "mount_sources": [str(resource_dir / "data")] if kind == "postgres" else [],
         "networks": ["bridge"],
         "docker_labels": {
             DOCKER_LABELS["test"]: "true", DOCKER_LABELS["run"]: RUN_ID,

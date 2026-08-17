@@ -6,11 +6,13 @@ from pathlib import Path
 import secrets
 import shutil
 import sys
+import time
 from typing import Callable
 
 from _integration_execute_orchestration import (
     CommandExecutor, FailureClass, OrchestrationError, DOCKER, _child_env,
     _inspect_argv, collect_docker_observation, collect_inventory,
+    observe_lifecycle_stability,
     observe_listener, provisional_rollback, reject_inventory_collision,
     require_loopback_listener, require_port_free, validate_provisional_observation,
 )
@@ -21,13 +23,18 @@ from _integration_resource_attestation import (
 from _integration_resource_lifecycle import (
     DockerResourceSpec, build_docker_spec, create_resource_directories,
     normalize_docker_observation, sanitized_subprocess_environment,
+    require_empty_postgres_data_dir,
     sentinel_payload, validate_cleanup_path, write_secure_json,
 )
 
 
 def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
                        approved_root: Path = APPROVED_TEMP_ROOT,
-                       secret_factory: Callable[[], str] | None = None
+                       secret_factory: Callable[[], str] | None = None,
+                       stability_window: float = 2.0,
+                       stability_interval: float = 0.5,
+                       monotonic: Callable[[], float] = time.monotonic,
+                       sleeper: Callable[[float], None] = time.sleep,
                        ) -> dict[str, object]:
     states = ["PRECHECK"]
     if spec.resource_type == "postgres" and any(
@@ -36,6 +43,13 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
     reject_inventory_collision(collect_inventory(executor), spec)
     create_resource_directories(spec.run_id, spec.resource_type, approved_root)
     states.append("TEMP_ROOT_CREATED")
+    if spec.resource_type == "postgres":
+        states.append("PGDATA_CREATED")
+        try:
+            require_empty_postgres_data_dir(spec)
+        except Exception:
+            raise OrchestrationError(FailureClass.PGDATA_NOT_EMPTY) from None
+        states.append("PGDATA_EMPTY_VERIFIED")
     require_port_free(observe_listener(executor, spec.port)); states.append("PRE_PORT_FREE")
     child_environment = _child_env()
     generated_secret = ""
@@ -68,10 +82,22 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
         raw = collect_docker_observation(executor, spec, container_id); states.append("DOCKER_OBSERVED")
         validate_provisional_observation(raw, spec, container_id)
         require_loopback_listener(observe_listener(executor, spec.port)); states.append("LISTENER_OBSERVED")
-        observation = normalize_docker_observation(raw, spec); states.append("ATTESTED")
+        stable = observe_lifecycle_stability(
+            executor, spec, container_id, raw, window=stability_window,
+            interval=stability_interval, monotonic=monotonic, sleeper=sleeper,
+        ); states.append("STABILITY_OBSERVED")
+        observation = normalize_docker_observation(stable, spec); states.append("ATTESTED")
         write_secure_json(spec.temp_dir / "observation.json", observation, approved_root=approved_root)
         write_secure_json(spec.temp_dir / "sentinel.json", sentinel_payload(observation), approved_root=approved_root)
-        states.extend(("SENTINEL_WRITTEN", "READY"))
+        states.append("SENTINEL_WRITTEN")
+        final_raw = collect_docker_observation(executor, spec, container_id)
+        validate_provisional_observation(final_raw, spec, container_id)
+        final = normalize_docker_observation(final_raw, spec)
+        require_loopback_listener(observe_listener(executor, spec.port))
+        if (final_raw.get("started_at") != stable.get("started_at") or
+                sentinel_payload(final) != sentinel_payload(observation)):
+            raise OrchestrationError(FailureClass.LIFECYCLE_STABILITY_FAILED)
+        states.extend(("POST_SENTINEL_OBSERVED", "READY"))
     except OrchestrationError as original:
         provisional_rollback(executor, spec, container_id)
         raise original

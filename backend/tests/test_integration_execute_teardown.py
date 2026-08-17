@@ -30,7 +30,7 @@ def inspected(value, *, running=True, labels=None):
               dict(value.labels) if labels is None else labels, running,
               "2026-08-16T00:00:00Z", "bridge",
               {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(value.port)}]},
-              [{"Source": str(value.temp_dir), "Destination": "/var/lib/postgresql/data"}]]
+              [{"Source": str(value.pgdata_dir), "Destination": "/var/lib/postgresql/data"}]]
     return "\n".join(json.dumps(item) for item in values)
 
 
@@ -74,7 +74,7 @@ def evidence(tmp_path):
 def test_start_failure_runs_provisional_exact_id_rollback(tmp_path):
     value = spec(tmp_path); fake = Fake(value, start_fails=True)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(value, executor=fake,
+        provision_fast(value, executor=fake,
                            approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.START_FAILED
     assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)
@@ -90,7 +90,7 @@ def test_sentinel_write_failure_triggers_exact_rollback(tmp_path, monkeypatch):
         return real_write(*args, **kwargs)
     monkeypatch.setattr(flows, "write_secure_json", fail_second)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(value, executor=fake,
+        provision_fast(value, executor=fake,
                            approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.SENTINEL_WRITE_FAILED
     assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)
@@ -138,3 +138,36 @@ def test_execute_scripts_never_use_fixture_observation_branch():
         source = (root / "scripts" / name).read_text()
         execute = source.split("if args.execute:", 1)[1].split("return 0", 1)[0]
         assert "args.observation" not in execute
+
+
+class FakeClock:
+    def __init__(self): self.now = 0.0
+    def monotonic(self): return self.now
+    def sleep(self, duration): self.now += duration
+
+
+def provision_fast(*args, **kwargs):
+    clock = FakeClock()
+    kwargs.update(stability_window=1.0, stability_interval=0.5,
+                  monotonic=clock.monotonic, sleeper=clock.sleep)
+    return provision_resource(*args, **kwargs)
+
+
+def test_normal_teardown_rejects_exited_container(tmp_path):
+    value, sentinel = evidence(tmp_path); fake = Fake(value, start_fails=True)
+    fake.ss_count = 1
+    with pytest.raises(Exception):
+        teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
+                          resource_type="postgres", image=IMAGE, executor=fake,
+                          approved_root=tmp_path / "approved")
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+
+
+def test_normal_teardown_rejects_missing_listener(tmp_path):
+    value, sentinel = evidence(tmp_path); fake = Fake(value)
+    with pytest.raises(OrchestrationError) as error:
+        teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
+                          resource_type="postgres", image=IMAGE, executor=fake,
+                          approved_root=tmp_path / "approved")
+    assert error.value.category is FailureClass.LISTENER_ATTESTATION_FAILED
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)

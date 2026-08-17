@@ -171,7 +171,7 @@ def validate_runtime_observation(attestation: ResourceAttestation,
         _fail("container internal port mismatch")
     mounts = data["mount_sources"]
     if attestation.resource_type == "postgres":
-        if mounts != [str(attestation.resource_temp_dir)]:
+        if mounts != [str(attestation.resource_temp_dir / "data")]:
             _fail("PostgreSQL mount identity mismatch")
     elif mounts != []:
         _fail("Redis must not use host mounts")

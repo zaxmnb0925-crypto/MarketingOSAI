@@ -15,7 +15,7 @@ from _integration_execute_flows import (
 )
 from _integration_execute_orchestration import (
     CommandResult, FailureClass, InventoryItem, ListenerObservation,
-    OrchestrationError, collect_inventory, observe_listener,
+    OrchestrationError, collect_inventory, observe_lifecycle_stability, observe_listener,
     parse_restricted_docker_observation, provisional_rollback,
     reject_inventory_collision, require_loopback_listener, require_port_free,
     validate_provisional_observation,
@@ -52,14 +52,15 @@ def pg_spec(tmp_path: Path):
 
 
 def inspect_output(spec, *, cid=CID, digest=None, labels=None, host="127.0.0.1",
-                   port=None, running=True, name=None, mounts=None):
+                   port=None, running=True, name=None, mounts=None,
+                   started="2026-08-16T00:00:00Z"):
     reference = spec.image if digest is None else spec.image.split("@", 1)[0] + "@" + digest
     values = [cid, "/" + (name or spec.container_name), reference,
               dict(spec.labels) if labels is None else labels, running,
-              "2026-08-16T00:00:00Z", "bridge",
+              started, "bridge",
               {f"{spec.internal_port}/tcp": [{"HostIp": host,
                                                "HostPort": str(port or spec.port)}]},
-              ([{"Source": str(spec.temp_dir), "Destination": "/var/lib/postgresql/data"}]
+              ([{"Source": str(spec.pgdata_dir), "Destination": "/var/lib/postgresql/data"}]
                if mounts is None and spec.resource_type == "postgres" else (mounts or []))]
     return "\n".join(json.dumps(value) for value in values)
 
@@ -224,13 +225,15 @@ def test_provisional_identity_mismatch_rejects(tmp_path, field, value):
 
 def test_successful_provision_orders_attestation_before_sentinel(tmp_path):
     spec, fake = fake_success(tmp_path)
-    result = provision_resource(
+    result = provision_fast(
         spec, executor=fake, approved_root=tmp_path / "approved",
         secret_factory=lambda: SYNTHETIC_SECRET,
     )
-    assert result["states"] == ("PRECHECK", "TEMP_ROOT_CREATED", "PRE_PORT_FREE",
-        "CONTAINER_CREATED", "EXACT_CONTAINER_ID_CAPTURED", "CONTAINER_STARTED",
-        "DOCKER_OBSERVED", "LISTENER_OBSERVED", "ATTESTED", "SENTINEL_WRITTEN", "READY")
+    assert result["states"] == ("PRECHECK", "TEMP_ROOT_CREATED", "PGDATA_CREATED",
+        "PGDATA_EMPTY_VERIFIED", "PRE_PORT_FREE", "CONTAINER_CREATED",
+        "EXACT_CONTAINER_ID_CAPTURED", "CONTAINER_STARTED", "DOCKER_OBSERVED",
+        "LISTENER_OBSERVED", "STABILITY_OBSERVED", "ATTESTED",
+        "SENTINEL_WRITTEN", "POST_SENTINEL_OBSERVED", "READY")
     assert Path(result["sentinel"]).stat().st_mode & 0o777 == 0o600
 
 
@@ -239,7 +242,7 @@ def test_secret_generated_once_and_only_reaches_create_child(tmp_path, capsys):
     def generate():
         calls.append(True)
         return SYNTHETIC_SECRET
-    result = provision_resource(
+    result = provision_fast(
         spec, executor=fake, approved_root=tmp_path / "approved",
         secret_factory=generate,
     )
@@ -255,7 +258,7 @@ def test_secret_generated_once_and_only_reaches_create_child(tmp_path, capsys):
     assert SYNTHETIC_SECRET not in json.dumps(result)
     assert SYNTHETIC_SECRET not in Path(result["sentinel"]).read_text()
     assert SYNTHETIC_SECRET not in (spec.temp_dir / "observation.json").read_text()
-    assert not [path for path in spec.temp_dir.iterdir() if SYNTHETIC_SECRET in path.read_text()]
+    assert not [path for path in spec.temp_dir.iterdir() if path.is_file() and SYNTHETIC_SECRET in path.read_text()]
     captured = capsys.readouterr()
     assert SYNTHETIC_SECRET not in captured.out and SYNTHETIC_SECRET not in captured.err
 
@@ -266,7 +269,7 @@ def test_default_csprng_is_invoked_once_with_32_bytes(tmp_path, monkeypatch):
         calls.append(byte_count)
         return SYNTHETIC_SECRET
     monkeypatch.setattr(flows.secrets, "token_urlsafe", generate)
-    provision_resource(spec, executor=fake, approved_root=tmp_path / "approved")
+    provision_fast(spec, executor=fake, approved_root=tmp_path / "approved")
     assert calls == [32]
 
 
@@ -275,7 +278,7 @@ def test_inherited_postgres_secret_rejected_before_commands(tmp_path, monkeypatc
     monkeypatch.setenv(name, "operator-value-must-not-appear")
     spec, fake = fake_success(tmp_path)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(spec, executor=fake, approved_root=tmp_path / "approved")
+        provision_fast(spec, executor=fake, approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.EXTERNAL_POSTGRES_SECRET_FORBIDDEN
     assert str(error.value) == "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
     assert fake.calls == []
@@ -285,7 +288,7 @@ def test_inherited_postgres_secret_rejected_before_commands(tmp_path, monkeypatc
 def test_inherited_unapproved_environment_is_not_propagated(tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-inherit")
     spec, fake = fake_success(tmp_path)
-    provision_resource(
+    provision_fast(
         spec, executor=fake, approved_root=tmp_path / "approved",
         secret_factory=lambda: SYNTHETIC_SECRET,
     )
@@ -297,27 +300,28 @@ def test_secret_generation_failure_is_sanitized_and_prevents_create(tmp_path):
     def fail_generation():
         raise RuntimeError("sensitive-generator-detail")
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(
+        provision_fast(
             spec, executor=fake, approved_root=tmp_path / "approved",
             secret_factory=fail_generation,
         )
     assert error.value.category is FailureClass.SECRET_GENERATION_FAILED
     assert str(error.value) == "SECRET_GENERATION_FAILED"
     assert not any(argv == spec.argv for argv, _ in fake.calls)
-    assert list(spec.temp_dir.iterdir()) == []
+    assert list(spec.temp_dir.iterdir()) == [spec.pgdata_dir]
 
 
 def test_short_or_non_text_generated_secret_fails_closed(tmp_path):
     for invalid in ("short", b"S" * 64):
         spec, fake = fake_success(tmp_path)
         with pytest.raises(OrchestrationError) as error:
-            provision_resource(
+            provision_fast(
                 spec, executor=fake, approved_root=tmp_path / "approved",
                 secret_factory=lambda invalid=invalid: invalid,
             )
         assert error.value.category is FailureClass.SECRET_GENERATION_FAILED
         assert not any(argv == spec.argv for argv, _ in fake.calls)
         if spec.temp_dir.exists():
+            spec.pgdata_dir.rmdir()
             spec.temp_dir.rmdir()
 
 
@@ -327,7 +331,7 @@ def test_create_failure_does_not_leak_generated_secret(tmp_path):
     fake.handler = lambda argv, kwargs, n: (_ for _ in ()).throw(
         RuntimeError(SYNTHETIC_SECRET)) if argv == spec.argv else original(argv, kwargs, n)
     with pytest.raises(OrchestrationError) as error:
-        provision_resource(
+        provision_fast(
             spec, executor=fake, approved_root=tmp_path / "approved",
             secret_factory=lambda: SYNTHETIC_SECRET,
         )
@@ -469,3 +473,124 @@ def test_documented_b5e_candidates_are_immutable_references():
                     "postgres@sha256:abc"):
         with pytest.raises(ResourceAttestationError):
             validate_image_reference(invalid)
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, duration):
+        self.sleeps.append(duration)
+        self.now += duration
+
+
+def stability_fake(spec, inspect_values, *, listener_fails_after=None):
+    values = list(inspect_values); listener_checks = 0
+    def handler(argv, _kwargs, _count):
+        nonlocal listener_checks
+        if argv[0].endswith("/ss"):
+            listener_checks += 1
+            open_now = listener_fails_after is None or listener_checks <= listener_fails_after
+            return CommandResult(0, f"LISTEN 0 1 127.0.0.1:{spec.port} 0.0.0.0:*\n" if open_now else "")
+        if argv[0].endswith("/lsof"):
+            open_now = listener_fails_after is None or listener_checks <= listener_fails_after
+            return CommandResult(0 if open_now else 1,
+                                 f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)" if open_now else "")
+        if argv[1] == "inspect":
+            return CommandResult(0, values.pop(0))
+        raise AssertionError(argv)
+    return FakeExecutor(handler)
+
+
+def test_bounded_stability_uses_fake_clock_and_finite_attempts(tmp_path):
+    spec = pg_spec(tmp_path); clock = FakeClock()
+    baseline = parse_restricted_docker_observation(inspect_output(spec), spec)
+    fake = stability_fake(spec, [inspect_output(spec), inspect_output(spec)])
+    result = observe_lifecycle_stability(
+        fake, spec, CID, baseline, window=1.0, interval=0.5,
+        monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert result["running"] is True and clock.sleeps == [0.5, 0.5]
+    assert len([argv for argv, _ in fake.calls if argv[1] == "inspect"]) == 2
+
+
+@pytest.mark.parametrize("change", ["exited", "cid", "started", "digest", "labels"])
+def test_stability_identity_or_state_change_fails_closed(tmp_path, change):
+    spec = pg_spec(tmp_path); clock = FakeClock()
+    baseline = parse_restricted_docker_observation(inspect_output(spec), spec)
+    kwargs = {"running": False} if change == "exited" else \
+             {"cid": "d" * 64} if change == "cid" else \
+             {"started": "2026-08-16T00:00:01Z"} if change == "started" else \
+             {"digest": "sha256:" + "d" * 64} if change == "digest" else {"labels": {}}
+    fake = stability_fake(spec, [inspect_output(spec, **kwargs)])
+    with pytest.raises((OrchestrationError, ResourceAttestationError)):
+        observe_lifecycle_stability(
+            fake, spec, CID, baseline, window=1.0, interval=0.5,
+            monotonic=clock.monotonic, sleeper=clock.sleep)
+
+
+def test_stability_listener_disappearance_fails_closed(tmp_path):
+    spec = pg_spec(tmp_path); clock = FakeClock()
+    baseline = parse_restricted_docker_observation(inspect_output(spec), spec)
+    fake = stability_fake(spec, [inspect_output(spec)], listener_fails_after=1)
+    with pytest.raises(OrchestrationError) as error:
+        observe_lifecycle_stability(
+            fake, spec, CID, baseline, window=1.0, interval=0.5,
+            monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert error.value.category is FailureClass.LISTENER_ATTESTATION_FAILED
+
+
+def test_immediate_exit_after_first_listener_never_reaches_sentinel(tmp_path):
+    spec, fake = fake_success(tmp_path); clock = FakeClock(); inspect_count = 0
+    original = fake.handler
+    def exit_after_first(argv, kwargs, count):
+        nonlocal inspect_count
+        if len(argv) > 1 and argv[1] == "inspect":
+            inspect_count += 1
+            return CommandResult(0, inspect_output(spec, running=inspect_count == 1))
+        return original(argv, kwargs, count)
+    fake.handler = exit_after_first
+    with pytest.raises(OrchestrationError):
+        provision_fast(spec, executor=fake, approved_root=tmp_path / "approved",
+                           secret_factory=lambda: SYNTHETIC_SECRET,
+                           stability_window=1.0, stability_interval=0.5,
+                           monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert not (spec.temp_dir / "sentinel.json").exists()
+
+
+def test_post_sentinel_exit_never_returns_ready(tmp_path, monkeypatch):
+    spec, fake = fake_success(tmp_path); clock = FakeClock(); sentinel_written = False
+    original_handler = fake.handler; real_write = flows.write_secure_json
+    def tracked_write(path, payload, **kwargs):
+        nonlocal sentinel_written
+        real_write(path, payload, **kwargs)
+        if path.name == "sentinel.json": sentinel_written = True
+    def exit_after_sentinel(argv, kwargs, count):
+        if len(argv) > 1 and argv[1] == "inspect" and sentinel_written:
+            return CommandResult(0, inspect_output(spec, running=False))
+        return original_handler(argv, kwargs, count)
+    monkeypatch.setattr(flows, "write_secure_json", tracked_write)
+    fake.handler = exit_after_sentinel
+    with pytest.raises(OrchestrationError):
+        provision_fast(spec, executor=fake, approved_root=tmp_path / "approved",
+                           secret_factory=lambda: SYNTHETIC_SECRET,
+                           stability_window=1.0, stability_interval=0.5,
+                           monotonic=clock.monotonic, sleeper=clock.sleep)
+    assert sentinel_written
+
+
+def test_ready_semantics_require_both_stability_phases_in_source():
+    source = Path(flows.__file__).read_text()
+    assert source.index('states.append("STABILITY_OBSERVED")') < source.index('states.append("SENTINEL_WRITTEN")')
+    assert source.index('states.append("SENTINEL_WRITTEN")') < source.index('"POST_SENTINEL_OBSERVED", "READY"')
+
+
+def provision_fast(*args, **kwargs):
+    clock = FakeClock()
+    kwargs.setdefault("stability_window", 1.0)
+    kwargs.setdefault("stability_interval", 0.5)
+    kwargs.setdefault("monotonic", clock.monotonic)
+    kwargs.setdefault("sleeper", clock.sleep)
+    return provision_resource(*args, **kwargs)

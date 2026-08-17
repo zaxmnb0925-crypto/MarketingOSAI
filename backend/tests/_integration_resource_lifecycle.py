@@ -53,6 +53,7 @@ class DockerResourceSpec:
     port: int
     internal_port: int
     temp_dir: Path
+    pgdata_dir: Path | None
     database_name: str | None
     database_user: str | None
     redis_db: int | None
@@ -72,6 +73,7 @@ class DockerResourceSpec:
             "internal_port": self.internal_port,
             "temp_dir": str(self.temp_dir),
             "database_name": self.database_name,
+            "pgdata_dir": str(self.pgdata_dir) if self.pgdata_dir else None,
             "database_user": self.database_user,
             "redis_db": self.redis_db,
             "labels": dict(self.labels),
@@ -138,7 +140,36 @@ def create_resource_directories(run_id: str, resource_type: str,
     run_dir.mkdir(mode=0o700, exist_ok=True)
     run_dir.chmod(0o700)
     target.mkdir(mode=0o700, exist_ok=False)
+    if resource_type == "postgres":
+        (target / "data").mkdir(mode=0o700)
     return target
+
+
+def postgres_data_dir(run_id: str, *,
+                      approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
+    """Return the only path permitted as the PostgreSQL PGDATA bind source."""
+    return resource_temp_dir(run_id, "postgres", approved_root) / "data"
+
+
+def require_empty_postgres_data_dir(spec: DockerResourceSpec) -> Path:
+    """Fail closed unless the exact, non-symlink PGDATA directory is empty."""
+    if spec.resource_type != "postgres" or spec.pgdata_dir is None:
+        raise ResourceAttestationError("PostgreSQL data directory unavailable")
+    expected = spec.temp_dir / "data"
+    if spec.pgdata_dir != expected:
+        raise ResourceAttestationError("PostgreSQL data path identity mismatch")
+    if spec.temp_dir.is_symlink() or spec.pgdata_dir.is_symlink():
+        raise ResourceAttestationError("PostgreSQL data path must not use symlinks")
+    try:
+        root = spec.temp_dir.resolve(strict=True)
+        data = spec.pgdata_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ResourceAttestationError("PostgreSQL data path unavailable") from exc
+    if data != root / "data" or root not in data.parents or not data.is_dir():
+        raise ResourceAttestationError("PostgreSQL data path escaped resource root")
+    if next(data.iterdir(), None) is not None:
+        raise ResourceAttestationError("PGDATA_NOT_EMPTY")
+    return data
 
 
 def build_docker_spec(*, run_id: str, resource_type: str, image: str,
@@ -149,6 +180,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
     validate_candidate_port(port, ss_listener_output="", lsof_listener_output="")
     name = container_name(run_id, resource_type)
     temp_dir = resource_temp_dir(run_id, resource_type, approved_root)
+    pgdata_dir = temp_dir / "data" if resource_type == "postgres" else None
     safe_id = run_id.removeprefix("r22-")
     labels = {
         DOCKER_LABELS["test"]: "true",
@@ -164,7 +196,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         internal_port = 5432
         prefix += [
             "--publish", f"127.0.0.1:{port}:5432",
-            "--mount", f"type=bind,src={temp_dir},dst=/var/lib/postgresql/data",
+            "--mount", f"type=bind,src={pgdata_dir},dst=/var/lib/postgresql/data",
             "--env", f"POSTGRES_DB={database_name}",
             "--env", f"POSTGRES_USER={database_user}",
             "--env", "POSTGRES_PASSWORD",
@@ -190,7 +222,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         raise ResourceAttestationError("prohibited Docker option")
     return DockerResourceSpec(
         run_id, resource_type, image, digest, name, "127.0.0.1", port,
-        internal_port, temp_dir, database_name, database_user, redis_value,
+        internal_port, temp_dir, pgdata_dir, database_name, database_user, redis_value,
         labels, tuple(prefix), required,
     )
 
@@ -215,12 +247,13 @@ def normalize_docker_observation(raw: Mapping[str, Any],
     if raw["internal_port"] != spec.internal_port:
         raise ResourceAttestationError("internal port mismatch")
     mounts = raw["mount_sources"]
+    expected_mount = str(spec.pgdata_dir) if spec.resource_type == "postgres" else None
     if not isinstance(mounts, list) or any(
-        not isinstance(value, str) or Path(value) != spec.temp_dir
+        not isinstance(value, str) or Path(value) != spec.pgdata_dir
         for value in mounts
     ):
         raise ResourceAttestationError("unexpected mount identity")
-    if spec.resource_type == "postgres" and mounts != [str(spec.temp_dir)]:
+    if spec.resource_type == "postgres" and mounts != [expected_mount]:
         raise ResourceAttestationError("PostgreSQL data mount mismatch")
     if spec.resource_type == "redis" and mounts != []:
         raise ResourceAttestationError("Redis must not use host storage")
@@ -277,6 +310,9 @@ def write_secure_json(path: Path, payload: Mapping[str, Any], *,
     if path.exists() or path.is_symlink():
         raise ResourceAttestationError("evidence file already exists")
     temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    pgdata = expected_parent / "data"
+    if path == pgdata or pgdata in path.parents:
+        raise ResourceAttestationError("evidence must remain outside PGDATA")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
