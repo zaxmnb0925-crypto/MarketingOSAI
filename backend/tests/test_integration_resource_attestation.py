@@ -46,6 +46,12 @@ def evidence(tmp_path: Path, kind: str):
         "container_name": f"marketingos-{RUN_ID}-{kind}", "running": True,
         "internal_port": 5432 if kind == "postgres" else 6379,
         "mount_sources": [str(resource_dir / "data")] if kind == "postgres" else [],
+        "mount_details": ([{
+            "type": "bind", "source": str(resource_dir / "data"),
+            "destination": "/var/lib/postgresql/data", "rw": True,
+        }] if kind == "postgres" else [{
+            "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
+        }]),
         "networks": ["bridge"],
         "docker_labels": {
             DOCKER_LABELS["test"]: "true", DOCKER_LABELS["run"]: RUN_ID,
@@ -72,6 +78,21 @@ def test_redis_attestation_uses_nonzero_database(tmp_path):
                              expected_type="redis", approved_root=root)
     validate_runtime_observation(attested, observation, approved_root=root)
     assert reconstruct_redis_url(attested).endswith("/15")
+
+
+def test_redis_persisted_volume_observation_is_rejected(tmp_path):
+    root, sentinel, observation = evidence(tmp_path, "redis")
+    attested = load_sentinel(sentinel, expected_run_id=RUN_ID,
+                             expected_type="redis", approved_root=root)
+    data = json.loads(observation.read_text())
+    data["mount_sources"] = ["anonymous-id"]
+    data["mount_details"] = [{
+        "type": "volume", "source": "anonymous-id",
+        "destination": "/data", "rw": True,
+    }]
+    observation.write_text(json.dumps(data)); observation.chmod(0o600)
+    with pytest.raises(ResourceAttestationError, match="tmpfs"):
+        validate_runtime_observation(attested, observation, approved_root=root)
 
 
 def test_run_id_mismatch_fails_closed(tmp_path):

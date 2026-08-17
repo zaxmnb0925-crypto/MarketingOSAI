@@ -36,6 +36,12 @@ IMAGE_PATTERN = re.compile(
     r"^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
     r"@sha256:[0-9a-f]{64}$"
 )
+REDIS_TMPFS_DESTINATION = "/data"
+REDIS_TMPFS_SIZE_BYTES = 64 * 1024 * 1024
+REDIS_TMPFS_MODE = 0o700
+REDIS_TMPFS_OPTION = (
+    f"{REDIS_TMPFS_DESTINATION}:rw,size={REDIS_TMPFS_SIZE_BYTES},mode={REDIS_TMPFS_MODE:04o}"
+)
 ORCHESTRATION_ORDER = (
     "provision", "observe", "attest", "migrate-postgres",
     "single-integration-file", "verify", "exact-teardown",
@@ -211,6 +217,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         internal_port = 6379
         prefix += [
             "--publish", f"127.0.0.1:{port}:6379",
+            "--tmpfs", REDIS_TMPFS_OPTION,
             image, "redis-server", "--save", "", "--appendonly", "no",
         ]
         required = ()
@@ -232,7 +239,7 @@ def normalize_docker_observation(raw: Mapping[str, Any],
     required = {
         "container_id", "image_digest", "labels", "container_name", "running",
         "published_host", "published_port", "internal_port", "started_at",
-        "mount_sources", "networks",
+        "mount_sources", "mount_details", "networks",
     }
     if set(raw) != required:
         raise ResourceAttestationError("Docker observation schema mismatch")
@@ -247,16 +254,25 @@ def normalize_docker_observation(raw: Mapping[str, Any],
     if raw["internal_port"] != spec.internal_port:
         raise ResourceAttestationError("internal port mismatch")
     mounts = raw["mount_sources"]
+    mount_details = raw["mount_details"]
     expected_mount = str(spec.pgdata_dir) if spec.resource_type == "postgres" else None
     if not isinstance(mounts, list) or any(
         not isinstance(value, str) or Path(value) != spec.pgdata_dir
         for value in mounts
     ):
         raise ResourceAttestationError("unexpected mount identity")
-    if spec.resource_type == "postgres" and mounts != [expected_mount]:
-        raise ResourceAttestationError("PostgreSQL data mount mismatch")
-    if spec.resource_type == "redis" and mounts != []:
-        raise ResourceAttestationError("Redis must not use host storage")
+    if spec.resource_type == "postgres":
+        if mounts != [expected_mount] or mount_details != [{
+            "type": "bind", "source": expected_mount,
+            "destination": "/var/lib/postgresql/data", "rw": True,
+        }]:
+            raise ResourceAttestationError("PostgreSQL data mount mismatch")
+    if spec.resource_type == "redis":
+        if mounts != [] or mount_details != [{
+            "type": "tmpfs", "source": "", "destination": REDIS_TMPFS_DESTINATION,
+            "rw": True,
+        }]:
+            raise ResourceAttestationError("Redis tmpfs storage identity mismatch")
     if raw["networks"] != ["bridge"]:
         raise ResourceAttestationError("unexpected Docker network identity")
     try:
@@ -283,6 +299,7 @@ def normalize_docker_observation(raw: Mapping[str, Any],
         "running": raw["running"],
         "internal_port": raw["internal_port"],
         "mount_sources": mounts,
+        "mount_details": mount_details,
         "networks": raw["networks"],
     }
 

@@ -70,6 +70,27 @@ Normal teardown remains exact-ID and fresh-observation based. It requires the
 owned container to be running and its expected listener to be present. It does
 not accept an exited container or a closed expected port.
 
+## Redis ephemeral /data storage
+
+Real-Docker inspection established that the approved official Redis image
+declares `VOLUME /data`. Without an explicit override Docker may silently
+allocate an anonymous local volume. Disposable test Redis therefore mounts
+exactly one controlled tmpfs at `/data` using
+`--tmpfs /data:rw,size=67108864,mode=0700`. This 64 MiB, mode-0700,
+read-write tmpfs is container-lifetime storage: no bind source, named volume,
+anonymous volume, or persistent host data path is authorized. RDB and AOF
+remain disabled.
+
+Restricted runtime observations retain mount type, source, destination, and
+read/write state. Redis accepts only the exact tmpfs identity above; a volume,
+bind, wrong destination, duplicate, or additional mount fails closed and is
+preserved for forensic review. Normal teardown repeats this fresh storage
+attestation before exact-ID stop/remove and never prunes Docker volumes.
+
+Redis lifecycle `READY` means `RESOURCE_LIFECYCLE_STABLE`; it does not mean
+`REDIS_APPLICATION_READINESS_PROVEN`. No `redis-cli`, `PING`, `FLUSHALL`,
+or `FLUSHDB` is introduced.
+
 ### Operator sentinel metadata contract
 
 When root-owned mode-0700 parents prevent nonprivileged traversal, future

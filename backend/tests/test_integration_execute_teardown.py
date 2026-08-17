@@ -25,12 +25,23 @@ def spec(tmp_path):
                              port=15432, approved_root=tmp_path / "approved")
 
 
+def redis_spec(tmp_path):
+    return build_docker_spec(
+        run_id=RUN_ID, resource_type="redis",
+        image="docker.io/library/redis@sha256:" + "b" * 64,
+        port=16379, approved_root=tmp_path / "approved",
+    )
+
+
 def inspected(value, *, running=True, labels=None):
     values = [CID, "/" + value.container_name, value.image,
               dict(value.labels) if labels is None else labels, running,
               "2026-08-16T00:00:00Z", "bridge",
-              {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(value.port)}]},
-              [{"Source": str(value.pgdata_dir), "Destination": "/var/lib/postgresql/data"}]]
+              {f"{value.internal_port}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(value.port)}]},
+              ([{"Type": "bind", "Source": str(value.pgdata_dir),
+                 "Destination": "/var/lib/postgresql/data", "RW": True}]
+               if value.resource_type == "postgres" else
+               [{"Type": "tmpfs", "Source": "", "Destination": "/data", "RW": True}])]
     return "\n".join(json.dumps(item) for item in values)
 
 
@@ -69,6 +80,49 @@ def evidence(tmp_path):
     sentinel = value.temp_dir / "sentinel.json"
     write_secure_json(sentinel, sentinel_payload(observation), approved_root=tmp_path / "approved")
     return value, sentinel
+
+
+def test_redis_teardown_requires_fresh_exact_tmpfs_identity(tmp_path):
+    value = redis_spec(tmp_path)
+    create_resource_directories(RUN_ID, "redis", tmp_path / "approved")
+    observation = normalize_docker_observation(
+        parse_restricted_docker_observation(inspected(value), value), value)
+    sentinel = value.temp_dir / "sentinel.json"
+    write_secure_json(sentinel, sentinel_payload(observation),
+                      approved_root=tmp_path / "approved")
+    fake = Fake(value); fake.ss_count = 1
+    result = teardown_resource(
+        sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
+        image=value.image, executor=fake, approved_root=tmp_path / "approved")
+    assert result["state"] == "COMPLETE"
+    assert [argv[1:] for argv, _ in fake.calls if argv[1] in {"stop", "rm"}] == [
+        ("stop", CID), ("rm", CID)]
+
+
+def test_redis_volume_observation_never_authorizes_teardown(tmp_path):
+    value = redis_spec(tmp_path)
+    create_resource_directories(RUN_ID, "redis", tmp_path / "approved")
+    observation = normalize_docker_observation(
+        parse_restricted_docker_observation(inspected(value), value), value)
+    sentinel = value.temp_dir / "sentinel.json"
+    write_secure_json(sentinel, sentinel_payload(observation),
+                      approved_root=tmp_path / "approved")
+    fake = Fake(value); fake.ss_count = 1
+    original = fake.run
+    def volume_instead_of_tmpfs(argv, **kwargs):
+        if tuple(argv)[1] == "inspect" and not fake.removed:
+            fake.calls.append((tuple(argv), kwargs))
+            mounts = [{"Type": "volume", "Source": "anonymous-id",
+                       "Destination": "/data", "RW": True}]
+            return CommandResult(0, inspected(value).rsplit("\n", 1)[0] +
+                                 "\n" + json.dumps(mounts))
+        return original(argv, **kwargs)
+    fake.run = volume_instead_of_tmpfs
+    with pytest.raises(Exception):
+        teardown_resource(
+            sentinel_path=sentinel, run_id=RUN_ID, resource_type="redis",
+            image=value.image, executor=fake, approved_root=tmp_path / "approved")
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_start_failure_runs_provisional_exact_id_rollback(tmp_path):

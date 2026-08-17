@@ -29,7 +29,7 @@ SENTINEL_KEYS = {
 }
 OBSERVATION_KEYS = SENTINEL_KEYS | {
     "listener_host", "listener_port", "docker_labels", "container_name",
-    "running", "internal_port", "mount_sources", "networks",
+    "running", "internal_port", "mount_sources", "mount_details", "networks",
 }
 
 
@@ -170,11 +170,18 @@ def validate_runtime_observation(attestation: ResourceAttestation,
     if data["internal_port"] != expected_internal_port:
         _fail("container internal port mismatch")
     mounts = data["mount_sources"]
+    mount_details = data["mount_details"]
     if attestation.resource_type == "postgres":
-        if mounts != [str(attestation.resource_temp_dir / "data")]:
+        source = str(attestation.resource_temp_dir / "data")
+        if mounts != [source] or mount_details != [{
+            "type": "bind", "source": source,
+            "destination": "/var/lib/postgresql/data", "rw": True,
+        }]:
             _fail("PostgreSQL mount identity mismatch")
-    elif mounts != []:
-        _fail("Redis must not use host mounts")
+    elif mounts != [] or mount_details != [{
+        "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
+    }]:
+        _fail("Redis tmpfs storage identity mismatch")
     if data["networks"] != ["bridge"]:
         _fail("Docker network identity mismatch")
     labels = data["docker_labels"]

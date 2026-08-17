@@ -180,7 +180,11 @@ def parse_restricted_docker_observation(output: str, spec: DockerResourceSpec) -
         binding = ports[f"{spec.internal_port}/tcp"]
         if not isinstance(binding, list) or len(binding) != 1:
             raise ValueError
-        sources = [entry["Source"] for entry in mounts]
+        mount_details = [{
+            "type": entry["Type"], "source": entry.get("Source", ""),
+            "destination": entry["Destination"], "rw": entry["RW"],
+        } for entry in mounts]
+        sources = [entry["source"] for entry in mount_details if entry["source"]]
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED) from None
     return {"container_id": cid, "container_name": str(name).removeprefix("/"),
@@ -188,7 +192,8 @@ def parse_restricted_docker_observation(output: str, spec: DockerResourceSpec) -
             "running": running, "started_at": started, "networks": [network],
             "published_host": binding[0]["HostIp"],
             "published_port": int(binding[0]["HostPort"]),
-            "internal_port": spec.internal_port, "mount_sources": sources}
+            "internal_port": spec.internal_port, "mount_sources": sources,
+            "mount_details": mount_details}
 
 
 def collect_docker_observation(executor: CommandExecutor, spec: DockerResourceSpec,
@@ -203,7 +208,13 @@ def validate_provisional_observation(raw: Mapping[str, object], spec: DockerReso
                 "image_digest": spec.image_digest, "labels": dict(spec.labels),
                 "published_host": "127.0.0.1", "published_port": spec.port,
                 "internal_port": spec.internal_port, "networks": ["bridge"],
-                "mount_sources": [str(spec.pgdata_dir)] if spec.resource_type == "postgres" else []}
+                "mount_sources": [str(spec.pgdata_dir)] if spec.resource_type == "postgres" else [],
+                "mount_details": ([{
+                    "type": "bind", "source": str(spec.pgdata_dir),
+                    "destination": "/var/lib/postgresql/data", "rw": True,
+                }] if spec.resource_type == "postgres" else [{
+                    "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
+                }])}
     if any(raw.get(key) != value for key, value in expected.items()):
         raise OrchestrationError(FailureClass.RESOURCE_IDENTITY_MISMATCH)
 

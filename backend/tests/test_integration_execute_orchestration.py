@@ -51,6 +51,11 @@ def pg_spec(tmp_path: Path):
                              port=15432, approved_root=tmp_path / "approved")
 
 
+def redis_spec(tmp_path: Path):
+    return build_docker_spec(run_id=RUN_ID, resource_type="redis", image=REDIS_IMAGE,
+                             port=16379, approved_root=tmp_path / "approved")
+
+
 def inspect_output(spec, *, cid=CID, digest=None, labels=None, host="127.0.0.1",
                    port=None, running=True, name=None, mounts=None,
                    started="2026-08-16T00:00:00Z"):
@@ -60,8 +65,11 @@ def inspect_output(spec, *, cid=CID, digest=None, labels=None, host="127.0.0.1",
               started, "bridge",
               {f"{spec.internal_port}/tcp": [{"HostIp": host,
                                                "HostPort": str(port or spec.port)}]},
-              ([{"Source": str(spec.pgdata_dir), "Destination": "/var/lib/postgresql/data"}]
-               if mounts is None and spec.resource_type == "postgres" else (mounts or []))]
+              ([{"Type": "bind", "Source": str(spec.pgdata_dir),
+                 "Destination": "/var/lib/postgresql/data", "RW": True}]
+               if mounts is None and spec.resource_type == "postgres" else
+               ([{"Type": "tmpfs", "Source": "", "Destination": "/data", "RW": True}]
+                if mounts is None else mounts))]
     return "\n".join(json.dumps(value) for value in values)
 
 
@@ -108,7 +116,8 @@ def test_restricted_parser_returns_only_allowlisted_fields(tmp_path):
     parsed = parse_restricted_docker_observation(inspect_output(spec), spec)
     assert set(parsed) == {"container_id", "container_name", "image_digest", "labels",
                            "running", "started_at", "networks", "published_host",
-                           "published_port", "internal_port", "mount_sources"}
+                           "published_port", "internal_port", "mount_sources",
+                           "mount_details"}
     assert "Env" not in parsed
 
 
@@ -221,6 +230,34 @@ def test_provisional_identity_mismatch_rejects(tmp_path, field, value):
     raw[field] = value
     with pytest.raises(OrchestrationError):
         validate_provisional_observation(raw, spec, CID)
+
+
+def test_redis_tmpfs_provision_preserves_stability_and_post_sentinel_ready(tmp_path):
+    spec = redis_spec(tmp_path)
+    listener_count = 0
+    inspect_count = 0
+    def handler(argv, kwargs, _count):
+        nonlocal listener_count, inspect_count
+        if argv[1:3] == ("ps", "-a"): return CommandResult(0, "")
+        if argv[0].endswith("/ss"):
+            listener_count += 1
+            return CommandResult(0, "" if listener_count == 1 else
+                                 f"LISTEN 0 4096 127.0.0.1:{spec.port} 0.0.0.0:*\n")
+        if argv[0].endswith("/lsof"):
+            return CommandResult(1 if listener_count == 1 else 0, "" if listener_count == 1 else
+                                 f"docker-proxy TCP 127.0.0.1:{spec.port} (LISTEN)\n")
+        if argv == spec.argv: return CommandResult(0, CID + "\n")
+        if argv[1] == "start": return CommandResult(0, CID + "\n")
+        if argv[1] == "inspect":
+            inspect_count += 1
+            return CommandResult(0, inspect_output(spec))
+        raise AssertionError(argv)
+    result = provision_fast(spec, executor=FakeExecutor(handler),
+                            approved_root=tmp_path / "approved")
+    assert result["state"] == "READY"
+    assert "STABILITY_OBSERVED" in result["states"]
+    assert result["states"][-2:] == ("POST_SENTINEL_OBSERVED", "READY")
+    assert inspect_count >= 2
 
 
 def test_successful_provision_orders_attestation_before_sentinel(tmp_path):

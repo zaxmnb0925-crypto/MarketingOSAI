@@ -43,6 +43,12 @@ def raw_observation(value):
         "internal_port": value.internal_port,
         "started_at": "2026-08-16T00:00:00Z",
         "mount_sources": [str(value.pgdata_dir)] if value.resource_type == "postgres" else [],
+        "mount_details": ([{
+            "type": "bind", "source": str(value.pgdata_dir),
+            "destination": "/var/lib/postgresql/data", "rw": True,
+        }] if value.resource_type == "postgres" else [{
+            "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
+        }]),
         "networks": ["bridge"],
     }
 
@@ -85,7 +91,41 @@ def test_postgres_spec_is_loopback_digest_pinned_and_secret_safe(tmp_path):
 def test_redis_spec_disables_persistence_and_uses_nonzero_db(tmp_path):
     value = spec(tmp_path, "redis")
     assert value.redis_db == 15
+    assert ("--tmpfs", "/data:rw,size=67108864,mode=0700") == value.argv[
+        value.argv.index("--tmpfs"):value.argv.index("--tmpfs") + 2
+    ]
+    assert value.argv.count("--tmpfs") == 1
+    assert not any(option in value.argv for option in ("--mount", "--volume"))
     assert value.argv[-4:] == ("--save", "", "--appendonly", "no")
+
+
+@pytest.mark.parametrize("mount_details,mount_sources", [
+    ([{"type": "volume", "source": "anonymous-id", "destination": "/data", "rw": True}], ["anonymous-id"]),
+    ([{"type": "volume", "source": "named-cache", "destination": "/data", "rw": True}], ["named-cache"]),
+    ([{"type": "bind", "source": "/tmp/redis-data", "destination": "/data", "rw": True}], ["/tmp/redis-data"]),
+    ([{"type": "tmpfs", "source": "", "destination": "/wrong", "rw": True}], []),
+    ([{"type": "tmpfs", "source": "", "destination": "/data", "rw": True},
+      {"type": "bind", "source": "/tmp/extra", "destination": "/extra", "rw": True}], ["/tmp/extra"]),
+    ([{"type": "tmpfs", "source": "", "destination": "/data", "rw": True},
+      {"type": "tmpfs", "source": "", "destination": "/data", "rw": True}], []),
+])
+def test_redis_rejects_noncanonical_storage_observations(
+        tmp_path, mount_details, mount_sources):
+    value = spec(tmp_path, "redis")
+    raw = raw_observation(value)
+    raw["mount_details"] = mount_details
+    raw["mount_sources"] = mount_sources
+    with pytest.raises(ResourceAttestationError, match="mount|storage"):
+        normalize_docker_observation(raw, value)
+
+
+def test_redis_accepts_exact_tmpfs_storage_observation(tmp_path):
+    value = spec(tmp_path, "redis")
+    observed = normalize_docker_observation(raw_observation(value), value)
+    assert observed["mount_sources"] == []
+    assert observed["mount_details"] == [{
+        "type": "tmpfs", "source": "", "destination": "/data", "rw": True,
+    }]
 
 
 def test_default_service_ports_are_rejected(tmp_path):
