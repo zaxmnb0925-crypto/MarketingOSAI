@@ -27,6 +27,7 @@ from _integration_resource_attestation import (
     ResourceAttestationError,
     authorize_destructive_cleanup,
     load_sentinel,
+    validate_operator_owned_metadata,
     reconstruct_database_url,
     validate_candidate_port,
     validate_migration_gate,
@@ -369,16 +370,14 @@ def write_secure_json(path: Path, payload: Mapping[str, Any], *,
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        if temporary.is_symlink() or stat.S_IMODE(temporary.stat().st_mode) != 0o600:
-            raise ResourceAttestationError("temporary evidence mode invalid")
+        validate_operator_owned_metadata(temporary)
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
-        if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o600:
-            raise ResourceAttestationError("evidence transaction verification failed")
+        validate_operator_owned_metadata(path)
     except Exception:
         try:
             temporary.unlink()

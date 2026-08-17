@@ -58,6 +58,34 @@ def _fail(message: str) -> None:
     raise ResourceAttestationError(message)
 
 
+def lifecycle_operator_identity() -> tuple[int, int]:
+    """Return the only trusted ownership identity for lifecycle metadata."""
+    return os.geteuid(), os.getegid()
+
+
+def _validate_metadata_stat(metadata: os.stat_result, *, expected_uid: int,
+                            expected_gid: int) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        _fail("attestation must be a regular file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        _fail("attestation file must be mode 0600")
+    if metadata.st_uid != expected_uid:
+        _fail("attestation owner UID differs from lifecycle operator")
+    if metadata.st_gid != expected_gid:
+        _fail("attestation owner GID differs from lifecycle operator")
+
+
+def validate_operator_owned_metadata(path: Path) -> None:
+    """Fail closed unless path is operator-owned regular mode-0600 metadata."""
+    expected_uid, expected_gid = lifecycle_operator_identity()
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ResourceAttestationError("attestation path unavailable") from exc
+    _validate_metadata_stat(metadata, expected_uid=expected_uid,
+                            expected_gid=expected_gid)
+
+
 def _under(path: Path, root: Path) -> Path:
     if not path.is_absolute() or not root.is_absolute():
         _fail("attestation paths must be absolute")
@@ -83,12 +111,19 @@ def _under(path: Path, root: Path) -> Path:
 
 
 def _read(path: Path, keys: set[str]) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        _fail("attestation must be a regular file")
-    if stat.S_IMODE(path.stat().st_mode) != 0o600:
-        _fail("attestation file must be mode 0600")
+    validate_operator_owned_metadata(path)
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ResourceAttestationError("attestation path unavailable") from exc
+    try:
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            expected_uid, expected_gid = lifecycle_operator_identity()
+            _validate_metadata_stat(
+                os.fstat(handle.fileno()), expected_uid=expected_uid,
+                expected_gid=expected_gid,
+            )
+            value = json.load(handle)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ResourceAttestationError("attestation JSON invalid") from exc
     if not isinstance(value, dict) or set(value) != keys:

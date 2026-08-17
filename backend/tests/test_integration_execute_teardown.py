@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import _integration_execute_flows as flows
+import _integration_resource_attestation as attestation
 from _integration_docker_command import docker_subcommand
 from _integration_execute_flows import provision_resource, teardown_resource
 from _integration_execute_orchestration import CommandResult, FailureClass, OrchestrationError
@@ -347,3 +348,39 @@ def test_normal_teardown_rejects_missing_listener(tmp_path):
                           approved_root=tmp_path / "approved")
     assert error.value.category is FailureClass.LISTENER_ATTESTATION_FAILED
     assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
+
+
+def test_metadata_owner_attestation_failure_preserves_post_create_resource(tmp_path, monkeypatch):
+    value = spec(tmp_path); fake = Fake(value)
+    real_write = flows.write_secure_json
+    expected = attestation.lifecycle_operator_identity()
+    drifted = {"value": False}
+
+    def identity():
+        return (expected[0] + 1, expected[1]) if drifted["value"] else expected
+
+    def write_then_drift(path, payload, **kwargs):
+        real_write(path, payload, **kwargs)
+        if path.name == "sentinel.json":
+            drifted["value"] = True
+
+    monkeypatch.setattr(attestation, "lifecycle_operator_identity", identity)
+    monkeypatch.setattr(flows, "write_secure_json", write_then_drift)
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
+    assert_review_required(error, FailureClass.SENTINEL_WRITE_FAILED)
+    assert not any(docker_subcommand(argv) in {"stop", "rm"} for argv, _ in fake.calls)
+    assert (value.temp_dir / "sentinel.json").is_file()
+    assert (value.temp_dir / "observation.json").is_file()
+
+
+def test_teardown_owner_drift_is_denied_without_docker_mutation(tmp_path, monkeypatch):
+    value, sentinel = evidence(tmp_path); fake = Fake(value); fake.ss_count = 1
+    uid, gid = attestation.lifecycle_operator_identity()
+    monkeypatch.setattr(attestation, "lifecycle_operator_identity", lambda: (uid, gid + 1))
+    with pytest.raises(attestation.ResourceAttestationError, match="GID"):
+        teardown_resource(sentinel_path=sentinel, run_id=RUN_ID,
+                          resource_type="postgres", image=IMAGE,
+                          executor=fake, approved_root=tmp_path / "approved")
+    assert fake.calls == []
+    assert sentinel.is_file() and value.temp_dir.is_dir()

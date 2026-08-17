@@ -149,14 +149,29 @@ or `FLUSHDB` is introduced.
 
 ### Operator sentinel metadata contract
 
-When root-owned mode-0700 parents prevent nonprivileged traversal, future
-operator materialization must inspect only the exact sentinel metadata using a
-separately approved command semantically equivalent to
-`sudo -- /usr/bin/stat -Lc '%F %a %U %G' <exact-sentinel-path>`. Authorization
-requires a regular, non-symlink, root-owned mode-0600 file. Never display its
-contents and never work around visibility with permission, ownership, group, or
-ACL widening.
+Lifecycle metadata is created by the non-root lifecycle operator, without sudo.
+Both `sentinel.json` and `observation.json` must be regular, non-symlink,
+mode-0600 files whose UID and GID exactly equal the lifecycle process effective
+UID and GID. Their same-directory temporary files and atomically replaced final
+paths are checked against the same contract. File type, symlink, mode, and owner
+checks are independent fail-closed requirements.
 
+Docker privilege remains limited to exact reviewed
+`/usr/bin/sudo -- /usr/bin/docker` commands; it is never used to create or repair
+metadata. Wrongly owned metadata is preserved as forensic evidence, not fixed
+with chmod, chown, ACL changes, or permission widening. A future host-specific
+manifest may lock the observed operator UID/GID, but portable source never
+hard-codes those host values or obtains expected ownership from file metadata,
+environment, usernames, configuration, or CLI input.
+
+
+When mode-0700 parent traversal requires a separately approved host-side
+metadata check, an operator may use the exact read-only form
+`sudo -- /usr/bin/stat -Lc '%F %a %u %g' <exact-sentinel-path>`. It must compare
+the numeric owner to the host-specific non-root lifecycle operator UID/GID; it
+must never reinterpret root ownership as valid, read file contents, or widen
+permissions. This metadata-only host check does not change which process creates
+or owns lifecycle evidence.
 ### Preserved legacy resource recovery specification (design only)
 
 The failed legacy run `r22-06ec72c39b79fc04` is not reinterpreted or migrated

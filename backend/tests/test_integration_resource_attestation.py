@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 
 import pytest
+import _integration_resource_attestation as attestation
 
 from _integration_resource_attestation import (
     ALEMBIC_TARGET_HEAD, DOCKER_LABELS, ResourceAttestationError,
@@ -175,3 +179,65 @@ def test_runner_source_has_exact_allowlist_and_no_batch_execution():
     }
     assert all(path in runner for path in expected)
     assert "git add" not in runner and "FLUSHALL" not in runner
+
+
+def test_operator_owned_metadata_and_atomic_final_paths_pass(tmp_path):
+    root, sentinel, observation = evidence(tmp_path, "postgres")
+    for path in (sentinel, observation):
+        metadata = path.lstat()
+        assert stat.S_ISREG(metadata.st_mode)
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+        assert (metadata.st_uid, metadata.st_gid) == (os.geteuid(), os.getegid())
+    accepted = load_sentinel(sentinel, expected_run_id=RUN_ID,
+                             expected_type="postgres", approved_root=root)
+    validate_runtime_observation(accepted, observation, approved_root=root)
+
+
+@pytest.mark.parametrize("identity", [
+    lambda: (os.geteuid() + 1, os.getegid()),
+    lambda: (os.geteuid(), os.getegid() + 1),
+])
+def test_sentinel_wrong_operator_uid_or_gid_fails_closed(tmp_path, monkeypatch, identity):
+    root, sentinel, _ = evidence(tmp_path, "postgres")
+    monkeypatch.setattr(attestation, "lifecycle_operator_identity", identity)
+    with pytest.raises(ResourceAttestationError, match="UID|GID"):
+        load_sentinel(sentinel, expected_run_id=RUN_ID,
+                      expected_type="postgres", approved_root=root)
+
+
+@pytest.mark.parametrize("identity", [
+    lambda: (os.geteuid() + 1, os.getegid()),
+    lambda: (os.geteuid(), os.getegid() + 1),
+])
+def test_observation_wrong_operator_uid_or_gid_fails_closed(tmp_path, monkeypatch, identity):
+    root, sentinel, observation = evidence(tmp_path, "postgres")
+    accepted = load_sentinel(sentinel, expected_run_id=RUN_ID,
+                             expected_type="postgres", approved_root=root)
+    monkeypatch.setattr(attestation, "lifecycle_operator_identity", identity)
+    with pytest.raises(ResourceAttestationError, match="UID|GID"):
+        validate_runtime_observation(accepted, observation, approved_root=root)
+
+
+def test_root_owned_metadata_is_rejected_for_nonroot_operator():
+    if os.geteuid() == 0:
+        pytest.skip("contract requires a non-root lifecycle operator")
+    root_metadata = SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0,
+    )
+    with pytest.raises(ResourceAttestationError, match="UID"):
+        attestation._validate_metadata_stat(
+            root_metadata, expected_uid=os.geteuid(), expected_gid=os.getegid(),
+        )
+
+
+def test_missing_and_nonregular_sentinel_fail_closed(tmp_path):
+    root, sentinel, _ = evidence(tmp_path, "postgres")
+    sentinel.unlink()
+    sentinel.mkdir(mode=0o600)
+    with pytest.raises(ResourceAttestationError, match="regular"):
+        load_sentinel(sentinel, expected_run_id=RUN_ID,
+                      expected_type="postgres", approved_root=root)
+    sentinel.rmdir()
+    with pytest.raises(ResourceAttestationError, match="unavailable"):
+        load_sentinel(sentinel, expected_run_id=RUN_ID,
+                      expected_type="postgres", approved_root=root)

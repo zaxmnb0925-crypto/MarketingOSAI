@@ -19,6 +19,7 @@ from _integration_execute_orchestration import (
 from _integration_resource_attestation import (
     ALEMBIC_TARGET_HEAD, APPROVED_TEMP_ROOT, CONTAINER_ID_PATTERN,
     load_sentinel, reconstruct_database_url, validate_migration_gate,
+    validate_runtime_observation,
 )
 from _integration_resource_lifecycle import (
     DockerResourceSpec, build_docker_spec, create_resource_directories,
@@ -106,6 +107,14 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
             write_secure_json(spec.temp_dir / "sentinel.json",
                               sentinel_payload(observation),
                               approved_root=approved_root)
+            persisted = load_sentinel(
+                spec.temp_dir / "sentinel.json", expected_run_id=spec.run_id,
+                expected_type=spec.resource_type, approved_root=approved_root,
+            )
+            validate_runtime_observation(
+                persisted, spec.temp_dir / "observation.json",
+                approved_root=approved_root,
+            )
         except Exception:
             raise OrchestrationError(FailureClass.SENTINEL_WRITE_FAILED) from None
         states.append("SENTINEL_WRITTEN")
