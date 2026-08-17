@@ -41,11 +41,10 @@ class FailureClass(str, Enum):
     LISTENER_ATTESTATION_FAILED = "LISTENER_ATTESTATION_FAILED"
     RESOURCE_IDENTITY_MISMATCH = "RESOURCE_IDENTITY_MISMATCH"
     SENTINEL_WRITE_FAILED = "SENTINEL_WRITE_FAILED"
-    ROLLBACK_AUTHORIZATION_FAILED = "ROLLBACK_AUTHORIZATION_FAILED"
-    ROLLBACK_EXECUTION_FAILED = "ROLLBACK_EXECUTION_FAILED"
     INVENTORY_COLLISION = "INVENTORY_COLLISION"
     EXTERNAL_POSTGRES_SECRET_FORBIDDEN = "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
     SECRET_GENERATION_FAILED = "SECRET_GENERATION_FAILED"
+    PROVISION_FAILED_REVIEW_REQUIRED = "PROVISION_FAILED_REVIEW_REQUIRED"
     MIGRATION_AUTHORIZATION_FAILED = "MIGRATION_AUTHORIZATION_FAILED"
     MIGRATION_EXECUTION_FAILED = "MIGRATION_EXECUTION_FAILED"
     LIFECYCLE_STABILITY_FAILED = "LIFECYCLE_STABILITY_FAILED"
@@ -55,8 +54,12 @@ class FailureClass(str, Enum):
 
 
 class OrchestrationError(RuntimeError):
-    def __init__(self, category: FailureClass, *, resource_preserved: bool = True):
+    def __init__(self, category: FailureClass, *, resource_preserved: bool = True,
+                 ownership_boundary: str | None = None,
+                 original_category: FailureClass | None = None):
         self.category, self.resource_preserved = category, resource_preserved
+        self.ownership_boundary = ownership_boundary
+        self.original_category = original_category
         super().__init__(category.value)
 
 
@@ -285,19 +288,3 @@ def require_loopback_listener(value: ListenerObservation) -> None:
         raise OrchestrationError(FailureClass.LISTENER_ATTESTATION_FAILED)
     if value.lsof_output and f":{value.port}" not in value.lsof_output:
         raise OrchestrationError(FailureClass.LISTENER_ATTESTATION_FAILED)
-
-
-def provisional_rollback(executor: CommandExecutor, spec: DockerResourceSpec,
-                         container_id: str) -> bool:
-    try:
-        raw = collect_docker_observation(executor, spec, container_id)
-        validate_provisional_observation(raw, spec, container_id)
-    except Exception:
-        raise OrchestrationError(FailureClass.ROLLBACK_AUTHORIZATION_FAILED) from None
-    try:
-        if raw["running"] is True:
-            executor.run((DOCKER, "stop", container_id), env=_child_env())
-        executor.run((DOCKER, "rm", container_id), env=_child_env())
-    except Exception:
-        raise OrchestrationError(FailureClass.ROLLBACK_EXECUTION_FAILED) from None
-    return True

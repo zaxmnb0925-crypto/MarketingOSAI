@@ -12,8 +12,7 @@ from typing import Callable
 from _integration_execute_orchestration import (
     CommandExecutor, FailureClass, OrchestrationError, DOCKER, _child_env,
     _inspect_argv, collect_docker_observation, collect_inventory,
-    observe_lifecycle_stability,
-    observe_listener, provisional_rollback, reject_inventory_collision,
+    observe_lifecycle_stability, observe_listener, reject_inventory_collision,
     require_loopback_listener, require_port_free, validate_provisional_observation,
 )
 from _integration_resource_attestation import (
@@ -26,6 +25,15 @@ from _integration_resource_lifecycle import (
     require_empty_postgres_data_dir,
     sentinel_payload, validate_cleanup_path, write_secure_json,
 )
+
+
+def _review_required(original_category: FailureClass, *, boundary: str) -> OrchestrationError:
+    return OrchestrationError(
+        FailureClass.PROVISION_FAILED_REVIEW_REQUIRED,
+        resource_preserved=True,
+        ownership_boundary=boundary,
+        original_category=original_category,
+    )
 
 
 def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
@@ -65,13 +73,17 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
     try:
         created = executor.run(spec.argv, env=child_environment)
     except Exception:
-        raise OrchestrationError(FailureClass.CREATE_FAILED) from None
+        raise _review_required(
+            FailureClass.CREATE_FAILED, boundary="CREATE_AMBIGUOUS_PRESERVE",
+        ) from None
     finally:
         child_environment.pop("POSTGRES_PASSWORD", None)
         generated_secret = ""
     container_id = created.stdout.strip()
     if not CONTAINER_ID_PATTERN.fullmatch(container_id):
-        raise OrchestrationError(FailureClass.CREATE_FAILED)
+        raise _review_required(
+            FailureClass.CREATE_FAILED, boundary="CREATE_AMBIGUOUS_PRESERVE",
+        )
     states.extend(("CONTAINER_CREATED", "EXACT_CONTAINER_ID_CAPTURED"))
     try:
         try:
@@ -87,8 +99,14 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
             interval=stability_interval, monotonic=monotonic, sleeper=sleeper,
         ); states.append("STABILITY_OBSERVED")
         observation = normalize_docker_observation(stable, spec); states.append("ATTESTED")
-        write_secure_json(spec.temp_dir / "observation.json", observation, approved_root=approved_root)
-        write_secure_json(spec.temp_dir / "sentinel.json", sentinel_payload(observation), approved_root=approved_root)
+        try:
+            write_secure_json(spec.temp_dir / "observation.json", observation,
+                              approved_root=approved_root)
+            write_secure_json(spec.temp_dir / "sentinel.json",
+                              sentinel_payload(observation),
+                              approved_root=approved_root)
+        except Exception:
+            raise OrchestrationError(FailureClass.SENTINEL_WRITE_FAILED) from None
         states.append("SENTINEL_WRITTEN")
         final_raw = collect_docker_observation(executor, spec, container_id)
         validate_provisional_observation(final_raw, spec, container_id)
@@ -99,15 +117,14 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
             raise OrchestrationError(FailureClass.LIFECYCLE_STABILITY_FAILED)
         states.extend(("POST_SENTINEL_OBSERVED", "READY"))
     except OrchestrationError as original:
-        provisional_rollback(executor, spec, container_id)
-        raise original
+        raise _review_required(
+            original.category, boundary="POST_CREATE_PRESERVE",
+        ) from None
     except Exception:
-        try:
-            provisional_rollback(executor, spec, container_id)
-        except OrchestrationError:
-            raise
-        raise OrchestrationError(FailureClass.SENTINEL_WRITE_FAILED,
-                                 resource_preserved=False) from None
+        raise _review_required(
+            FailureClass.RESOURCE_IDENTITY_MISMATCH,
+            boundary="POST_CREATE_PRESERVE",
+        ) from None
     return {"state": states[-1], "states": tuple(states), "container_id": container_id,
             "sentinel": str(spec.temp_dir / "sentinel.json"), "secret_logged": False}
 

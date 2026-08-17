@@ -30,9 +30,32 @@ The only permitted lifecycle order is provision → observe → attest → migra
 
 ## B5F execute-mode status
 
-IMPLEMENTED_AND_STATICALLY_VERIFIED: execution is injectable and argv-only; Docker inventory uses stopped-inclusive, no-truncation collection with only fixed ID, name, and three ownership-label fields; inspect collectors request restricted identity fields; listener checks use `ss` and `lsof`; provision separates create from exact-ID start; provisional rollback re-observes ownership; sentinels use same-directory mode-0600 temporary files, fsync, and atomic rename after attestation; migration uses an allowlisted child environment; teardown requires fresh exact-ID observation, container-absence and port-close verification, and exact-path cleanup. Execute mode cannot use an arbitrary observation JSON file.
+IMPLEMENTED_AND_STATICALLY_VERIFIED: execution is injectable and argv-only; Docker inventory uses stopped-inclusive, no-truncation collection with only fixed ID, name, and three ownership-label fields; inspect collectors request restricted identity fields; listener checks use `ss` and `lsof`; provision separates create from exact-ID start; post-create failures preserve exact resources for review; sentinels use same-directory mode-0600 temporary files, fsync, and atomic rename after attestation; migration uses an allowlisted child environment; teardown requires fresh exact-ID observation, container-absence and port-close verification, and exact-path cleanup. Execute mode cannot use an arbitrary observation JSON file.
 
 RUNTIME_NOT_YET_VERIFIED: no Docker daemon, image, PostgreSQL, Redis, Alembic migration, or integration test was used during B5F. Every real execution remains separately authorized.
+
+## Provision failure preservation boundary
+
+Before Docker create, validation, collision, port, secret-generation, and exact
+resource-root preconditions may abort without a Docker resource. The current
+flow performs no automatic pre-create metadata cleanup and does not broaden
+cleanup beyond existing exact-path operations.
+
+A Docker create exception, timeout, or malformed result is ambiguous: absence
+of a resource is not proven. It enters `CREATE_AMBIGUOUS_PRESERVE`; no lookup
+or deletion by container name or run ID is attempted. Once create returns an
+exact CID, the ownership boundary becomes `POST_CREATE_PRESERVE` until accepted
+`READY`. Start, initial observation, storage attestation, listener, bounded
+stability, StartedAt, sentinel write or validation, and post-sentinel failures
+all return sanitized `PROVISION_FAILED_REVIEW_REQUIRED` and preserve the exact
+container and resource-root evidence. Automatic `docker stop`, `docker rm`,
+normal teardown, and metadata deletion are prohibited across this boundary.
+
+A failed provision is not teardown authorization. Exact forensic review must
+occur first; the operator must not rerun or automatically invoke normal
+teardown. After accepted `READY`, normal teardown remains a separate, explicit
+operation with its existing fresh identity, storage, listener, and sentinel
+authorization gates.
 
 B5E candidate inputs were resolved on 2026-08-16 for linux/amd64 and have not been pulled or daemon-verified. Revalidate them before future execution when policy requires:
 

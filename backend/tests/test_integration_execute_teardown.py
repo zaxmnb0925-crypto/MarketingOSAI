@@ -153,17 +153,20 @@ def test_redis_tmpfs_drift_never_authorizes_teardown(tmp_path):
     assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
 
 
-def test_start_failure_runs_provisional_exact_id_rollback(tmp_path):
+def test_start_failure_preserves_exact_resource_for_review(tmp_path):
     value = spec(tmp_path); fake = Fake(value, start_fails=True)
     with pytest.raises(OrchestrationError) as error:
         provision_fast(value, executor=fake,
                            approved_root=tmp_path / "approved")
-    assert error.value.category is FailureClass.START_FAILED
-    assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)
-    assert not any(argv[1:] == ("stop", CID) for argv, _ in fake.calls)
+    assert error.value.category is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    assert error.value.original_category is FailureClass.START_FAILED
+    assert error.value.ownership_boundary == "POST_CREATE_PRESERVE"
+    assert error.value.resource_preserved is True
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert value.temp_dir.exists()
 
 
-def test_sentinel_write_failure_triggers_exact_rollback(tmp_path, monkeypatch):
+def test_sentinel_write_failure_preserves_resource_for_review(tmp_path, monkeypatch):
     value = spec(tmp_path); fake = Fake(value)
     real_write = flows.write_secure_json; count = {"value": 0}
     def fail_second(*args, **kwargs):
@@ -174,8 +177,98 @@ def test_sentinel_write_failure_triggers_exact_rollback(tmp_path, monkeypatch):
     with pytest.raises(OrchestrationError) as error:
         provision_fast(value, executor=fake,
                            approved_root=tmp_path / "approved")
-    assert error.value.category is FailureClass.SENTINEL_WRITE_FAILED
-    assert any(argv[1:] == ("rm", CID) for argv, _ in fake.calls)
+    assert error.value.category is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    assert error.value.original_category is FailureClass.SENTINEL_WRITE_FAILED
+    assert error.value.ownership_boundary == "POST_CREATE_PRESERVE"
+    assert error.value.resource_preserved is True
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert value.temp_dir.exists()
+
+
+def assert_review_required(error, original_category):
+    assert error.value.category is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    assert error.value.original_category is original_category
+    assert error.value.ownership_boundary == "POST_CREATE_PRESERVE"
+    assert error.value.resource_preserved is True
+
+
+def test_initial_observation_failure_preserves_resource(tmp_path):
+    value = spec(tmp_path); fake = Fake(value)
+    original = fake.run
+    def invalid_observation(argv, **kwargs):
+        if tuple(argv)[1] == "inspect":
+            fake.calls.append((tuple(argv), kwargs))
+            return CommandResult(0, "malformed")
+        return original(argv, **kwargs)
+    fake.run = invalid_observation
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
+    assert_review_required(error, FailureClass.DOCKER_OBSERVATION_FAILED)
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert value.temp_dir.exists()
+
+
+def test_redis_storage_attestation_failure_preserves_resource(tmp_path):
+    value = redis_spec(tmp_path); fake = Fake(value)
+    original = fake.run
+    def invalid_storage(argv, **kwargs):
+        if tuple(argv)[1] == "inspect":
+            fake.calls.append((tuple(argv), kwargs))
+            return CommandResult(0, inspected(
+                value, host_tmpfs={"/data": "rw,size=1024,mode=0700"}))
+        return original(argv, **kwargs)
+    fake.run = invalid_storage
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
+    assert_review_required(error, FailureClass.RESOURCE_IDENTITY_MISMATCH)
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert value.temp_dir.exists()
+
+
+def test_stability_drift_preserves_resource(tmp_path):
+    value = spec(tmp_path); fake = Fake(value); inspect_count = 0
+    original = fake.run
+    def drift(argv, **kwargs):
+        nonlocal inspect_count
+        if tuple(argv)[1] == "inspect":
+            inspect_count += 1
+            fake.calls.append((tuple(argv), kwargs))
+            started = ("2026-08-16T00:00:01Z" if inspect_count > 1 else
+                       "2026-08-16T00:00:00Z")
+            return CommandResult(0, inspected(value).replace(
+                json.dumps("2026-08-16T00:00:00Z"), json.dumps(started), 1))
+        return original(argv, **kwargs)
+    fake.run = drift
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
+    assert_review_required(error, FailureClass.LIFECYCLE_STABILITY_FAILED)
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
+    assert value.temp_dir.exists()
+
+
+def test_post_sentinel_failure_preserves_container_and_metadata(tmp_path, monkeypatch):
+    value = spec(tmp_path); fake = Fake(value); sentinel_written = False
+    real_write = flows.write_secure_json
+    def tracked_write(path, payload, **kwargs):
+        nonlocal sentinel_written
+        real_write(path, payload, **kwargs)
+        if path.name == "sentinel.json":
+            sentinel_written = True
+    original = fake.run
+    def post_sentinel_drift(argv, **kwargs):
+        if tuple(argv)[1] == "inspect" and sentinel_written:
+            fake.calls.append((tuple(argv), kwargs))
+            return CommandResult(0, inspected(value, running=False))
+        return original(argv, **kwargs)
+    monkeypatch.setattr(flows, "write_secure_json", tracked_write)
+    fake.run = post_sentinel_drift
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(value, executor=fake, approved_root=tmp_path / "approved")
+    assert_review_required(error, FailureClass.RESOURCE_IDENTITY_MISMATCH)
+    assert sentinel_written
+    assert (value.temp_dir / "sentinel.json").is_file()
+    assert (value.temp_dir / "observation.json").is_file()
+    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_teardown_uses_fresh_observation_exact_id_and_closes_port(tmp_path):

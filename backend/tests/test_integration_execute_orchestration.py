@@ -16,7 +16,7 @@ from _integration_execute_flows import (
 from _integration_execute_orchestration import (
     CommandResult, FailureClass, InventoryItem, ListenerObservation,
     OrchestrationError, collect_inventory, observe_lifecycle_stability, observe_listener,
-    parse_restricted_docker_observation, provisional_rollback,
+    parse_restricted_docker_observation,
     reject_inventory_collision, require_loopback_listener, require_port_free,
     validate_provisional_observation,
 )
@@ -392,7 +392,7 @@ def test_short_or_non_text_generated_secret_fails_closed(tmp_path):
             spec.temp_dir.rmdir()
 
 
-def test_create_failure_does_not_leak_generated_secret(tmp_path):
+def test_ambiguous_create_failure_preserves_for_review_without_cleanup(tmp_path):
     spec, fake = fake_success(tmp_path)
     original = fake.handler
     fake.handler = lambda argv, kwargs, n: (_ for _ in ()).throw(
@@ -402,8 +402,15 @@ def test_create_failure_does_not_leak_generated_secret(tmp_path):
             spec, executor=fake, approved_root=tmp_path / "approved",
             secret_factory=lambda: SYNTHETIC_SECRET,
         )
-    assert str(error.value) == "CREATE_FAILED"
+    assert error.value.category is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    assert error.value.original_category is FailureClass.CREATE_FAILED
+    assert error.value.ownership_boundary == "CREATE_AMBIGUOUS_PRESERVE"
+    assert error.value.resource_preserved is True
+    assert str(error.value) == "PROVISION_FAILED_REVIEW_REQUIRED"
     assert SYNTHETIC_SECRET not in str(error.value)
+    assert not any(argv[1] in {"stop", "rm", "kill"} for argv, _ in fake.calls)
+    assert not any("--filter" in argv for argv, _ in fake.calls)
+    assert spec.temp_dir.exists()
 
 
 def test_dry_run_has_no_external_secret_requirement_or_generation(tmp_path, monkeypatch, capsys):
@@ -420,23 +427,6 @@ def test_dry_run_has_no_external_secret_requirement_or_generation(tmp_path, monk
     assert SYNTHETIC_SECRET not in output
     source = script.read_text()
     assert "POSTGRES_TEST_PASSWORD" not in source and "POSTGRES_PASSWORD" not in source
-
-
-def test_provisional_rollback_uses_exact_id(tmp_path):
-    spec = pg_spec(tmp_path)
-    fake = FakeExecutor(lambda argv, _kwargs, _n: CommandResult(0, inspect_output(spec))
-                        if argv[1] == "inspect" else CommandResult(0, ""))
-    assert provisional_rollback(fake, spec, CID)
-    assert all(call[0][-1] == CID for call in fake.calls)
-
-
-def test_rollback_mismatch_preserves_resource(tmp_path):
-    spec = pg_spec(tmp_path)
-    fake = FakeExecutor(lambda *_: CommandResult(0, inspect_output(spec, labels={})))
-    with pytest.raises(OrchestrationError) as error:
-        provisional_rollback(fake, spec, CID)
-    assert error.value.category is FailureClass.ROLLBACK_AUTHORIZATION_FAILED
-    assert not any(argv[1] in {"stop", "rm"} for argv, _ in fake.calls)
 
 
 def test_atomic_write_rejects_existing_and_leaves_no_temp(tmp_path):
