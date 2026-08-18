@@ -17,7 +17,8 @@ from _integration_execute_flows import (
 )
 from _integration_execute_orchestration import (
     CommandResult, FailureClass, InventoryItem, ListenerObservation,
-    OrchestrationError, collect_inventory, observe_lifecycle_stability, observe_listener,
+    OrchestrationError, SubprocessCommandExecutor, collect_inventory,
+    observe_lifecycle_stability, observe_listener,
     parse_restricted_docker_observation,
     reject_inventory_collision, require_loopback_listener, require_port_free,
     validate_provisional_observation,
@@ -28,6 +29,7 @@ from _integration_resource_lifecycle import (
     postgres_password_file_path, read_postgres_password_file, sentinel_payload,
     validate_image_reference, write_secure_json,
 )
+import subprocess
 
 RUN_ID = "r22-0123456789abcdef"
 PG_IMAGE = "docker.io/library/postgres@sha256:" + "a" * 64
@@ -140,6 +142,147 @@ def test_raw_environment_cannot_be_added_to_restricted_output(tmp_path):
 def inventory_row(*, cid=CID, name="safe", test_resource="", run_id="",
                   resource_type=""):
     return "\t".join((cid, name, test_resource, run_id, resource_type))
+
+
+def test_executor_subprocess_exception_has_distinct_safe_failure(monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+
+    def fail_run(*_args, **_kwargs):
+        raise OSError(synthetic_secret)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fail_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "POSTGRES_TEST_PASSWORD": synthetic_secret,
+            },
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.SUBPROCESS_EXECUTION_FAILED
+    )
+    assert error.value.returncode is None
+
+    safe = str(error.value)
+
+    assert safe == "SUBPROCESS_EXECUTION_FAILED"
+    assert synthetic_secret not in safe
+    assert "POSTGRES_TEST_PASSWORD" not in safe
+    assert "DATABASE_URL" not in safe
+
+
+def test_executor_disallowed_returncode_exposes_integer_only(monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=(
+                "stdout-"
+                + synthetic_secret
+            ),
+            stderr=(
+                "stderr-"
+                + synthetic_url
+            ),
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+                "POSTGRES_TEST_PASSWORD": synthetic_secret,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.COMMAND_RETURN_CODE_REJECTED
+    )
+    assert error.value.returncode == 7
+
+    safe = str(error.value)
+
+    assert safe == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+    assert synthetic_secret not in safe
+    assert synthetic_url not in safe
+
+    assert "stdout-" not in safe
+    assert "stderr-" not in safe
+
+    assert "DATABASE_URL" not in safe
+    assert "POSTGRES_TEST_PASSWORD" not in safe
+
+
+def test_executor_allowed_nonzero_returncode_still_returns_result(monkeypatch):
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            5,
+            stdout="safe-marker\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    result = SubprocessCommandExecutor().run(
+        (sys.executable, "-c", "pass"),
+        env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        },
+        allowed_returncodes=frozenset({5}),
+    )
+
+    assert result.returncode == 5
+    assert result.stdout == "safe-marker\n"
+    assert result.stderr == ""
+
+
+def test_orchestration_error_without_returncode_preserves_exact_message():
+    error = OrchestrationError(
+        FailureClass.EXTERNAL_POSTGRES_SECRET_FORBIDDEN
+    )
+
+    assert error.returncode is None
+    assert (
+        str(error)
+        == "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
+    )
 
 
 def test_inventory_command_and_parser_are_fixed_field_minimal():

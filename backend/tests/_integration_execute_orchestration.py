@@ -41,6 +41,8 @@ class FailureClass(str, Enum):
     CREATE_FAILED = "CREATE_FAILED"
     START_FAILED = "START_FAILED"
     DOCKER_OBSERVATION_FAILED = "DOCKER_OBSERVATION_FAILED"
+    SUBPROCESS_EXECUTION_FAILED = "SUBPROCESS_EXECUTION_FAILED"
+    COMMAND_RETURN_CODE_REJECTED = "COMMAND_RETURN_CODE_REJECTED"
     LISTENER_ATTESTATION_FAILED = "LISTENER_ATTESTATION_FAILED"
     RESOURCE_IDENTITY_MISMATCH = "RESOURCE_IDENTITY_MISMATCH"
     SENTINEL_WRITE_FAILED = "SENTINEL_WRITE_FAILED"
@@ -59,11 +61,16 @@ class FailureClass(str, Enum):
 class OrchestrationError(RuntimeError):
     def __init__(self, category: FailureClass, *, resource_preserved: bool = True,
                  ownership_boundary: str | None = None,
-                 original_category: FailureClass | None = None):
+                 original_category: FailureClass | None = None,
+                 returncode: int | None = None):
         self.category, self.resource_preserved = category, resource_preserved
         self.ownership_boundary = ownership_boundary
         self.original_category = original_category
-        super().__init__(category.value)
+        self.returncode = returncode
+        message = category.value
+        if returncode is not None:
+            message += f": returncode={returncode}"
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -98,12 +105,17 @@ class SubprocessCommandExecutor:
                 text=True, capture_output=True, timeout=timeout, check=False,
             )
         except (OSError, subprocess.SubprocessError):
-            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED) from None
+            raise OrchestrationError(
+                FailureClass.SUBPROCESS_EXECUTION_FAILED
+            ) from None
         result = CommandResult(completed.returncode,
                                completed.stdout[:MAX_CAPTURE_BYTES],
                                completed.stderr[:MAX_CAPTURE_BYTES])
         if result.returncode not in allowed_returncodes:
-            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED)
+            raise OrchestrationError(
+                FailureClass.COMMAND_RETURN_CODE_REJECTED,
+                returncode=result.returncode,
+            )
         return result
 
 
