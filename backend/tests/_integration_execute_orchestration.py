@@ -174,7 +174,7 @@ def _inspect_argv(container_id: str) -> tuple[str, ...]:
               "{{json .Config.Labels}}", "{{json .State.Running}}",
               "{{json .State.StartedAt}}", "{{json .HostConfig.NetworkMode}}",
               "{{json .NetworkSettings.Ports}}", "{{json .Mounts}}",
-              "{{json .HostConfig.Tmpfs}}", "{{json .Config.Volumes}}")
+              '{{if (index .HostConfig "Tmpfs")}}{{json (index .HostConfig "Tmpfs")}}{{else}}{}{{end}}', "{{json .Config.Volumes}}")
     return docker_command("inspect", "--type", "container", "--format",
                           "\n".join(fields), container_id)
 

@@ -1195,3 +1195,56 @@ def test_postgres_execute_leaves_operator_password_file_unchanged(
         & 0o777
     ) == before_mode
     assert before_mode == 0o600
+
+
+def test_inspect_template_is_missing_key_safe_for_hostconfig_tmpfs():
+    """HostConfig may omit Tmpfs; restricted Docker observation must still execute."""
+    import _integration_execute_orchestration as orchestration
+
+    argv = orchestration._inspect_argv(CID)
+
+    assert docker_subcommand(argv) == "inspect"
+
+    assert argv[:7] == (
+        *DOCKER_PRIVILEGE_PREFIX,
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+    )
+
+    assert argv[8] == CID
+
+    fields = argv[7].split("\n")
+
+    assert len(fields) == 11
+
+    assert tuple(fields[:9]) == (
+        "{{json .Id}}",
+        "{{json .Name}}",
+        "{{json .Config.Image}}",
+        "{{json .Config.Labels}}",
+        "{{json .State.Running}}",
+        "{{json .State.StartedAt}}",
+        "{{json .HostConfig.NetworkMode}}",
+        "{{json .NetworkSettings.Ports}}",
+        "{{json .Mounts}}",
+    )
+
+    expected_tmpfs_field = (
+        '{{if (index .HostConfig "Tmpfs")}}'
+        '{{json (index .HostConfig "Tmpfs")}}'
+        '{{else}}{}{{end}}'
+    )
+
+    assert fields[9] == expected_tmpfs_field
+
+    assert fields[10] == "{{json .Config.Volumes}}"
+
+    # The unsafe direct map-key lookup is the regression being blocked.
+    assert "{{json .HostConfig.Tmpfs}}" not in argv[7]
+
+    # Restricted observation remains secret-blind.
+    assert ".Config.Env" not in argv[7]
+    assert "POSTGRES_PASSWORD" not in argv[7]
+    assert "POSTGRES_TEST_PASSWORD" not in argv[7]
