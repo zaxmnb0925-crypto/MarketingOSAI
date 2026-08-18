@@ -1413,3 +1413,321 @@ def test_commit18_allows_unrelated_labeled_resource(tmp_path):
         (item,),
         planned,
     )
+
+
+# R22_ENTRYPOINT_POLICY_FAKE_ONLY_BEGIN
+
+def _entrypoint_policy_fake(
+    returncode,
+    stdout="",
+    stderr="",
+):
+    return FakeExecutor(
+        lambda _argv, _kwargs, _count:
+            CommandResult(
+                returncode,
+                stdout,
+                stderr,
+            )
+    )
+
+
+def test_entrypoint_policy_reconciliation_exit5_plus_markers_normalizes_to_zero():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+        "\nno tests ran in 0.01s\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    result = single_runner._run_pytest(
+        fake,
+        command=command,
+        child_env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "DATABASE_URL":
+                "postgresql+asyncpg://"
+                "synthetic@127.0.0.1:1/"
+                "marketingos_test_fake",
+        },
+        cwd=Path("/tmp"),
+        relative=relative,
+    )
+
+    assert result == 0
+
+    assert "-s" in command
+
+    assert (
+        "-p",
+        "_test_isolation_plugin",
+    ) == (
+        command[
+            command.index("-p"):
+            command.index("-p") + 2
+        ]
+    )
+
+    assert (
+        "_v013h_legacy_target_compat"
+        in command
+    )
+
+    assert len(fake.calls) == 1
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({5})
+
+    assert (
+        "POSTGRES_TEST_PASSWORD"
+        not in kwargs["env"]
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        (
+            "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        ),
+        (
+            "Provider/Meta execution invoked: NO\n"
+        ),
+        "",
+    ],
+)
+def test_entrypoint_policy_reconciliation_exit5_missing_marker_fails_closed(
+    stdout,
+):
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="semantic success markers",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+
+def test_entrypoint_policy_reconciliation_unexpected_exit0_fails_closed():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        0,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unexpected pytest return code",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({5})
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        (
+            "backend/tests/"
+            "test_publication_publish_http_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_normal_mode_integration.py"
+        ),
+    ],
+)
+def test_entrypoint_policy_collectable_files_accept_exit0_only(
+    relative,
+):
+    import _integration_single_file_runner as single_runner
+
+    fake = _entrypoint_policy_fake(
+        0,
+        "1 passed\n",
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    result = single_runner._run_pytest(
+        fake,
+        command=command,
+        child_env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        },
+        cwd=Path("/tmp"),
+        relative=relative,
+    )
+
+    assert result == 0
+    assert "-s" not in command
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({0})
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        (
+            "backend/tests/"
+            "test_publication_publish_http_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_normal_mode_integration.py"
+        ),
+    ],
+)
+def test_entrypoint_policy_collectable_files_exit5_fails_closed(
+    relative,
+):
+    import _integration_single_file_runner as single_runner
+
+    fake = _entrypoint_policy_fake(
+        5,
+        "no tests ran\n",
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unexpected pytest return code",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({0})
+
+
+def test_entrypoint_policy_reconciliation_marker_cardinality_is_exact():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="semantic success markers",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+
+# R22_ENTRYPOINT_POLICY_FAKE_ONLY_END

@@ -20,6 +20,92 @@ ALLOWLIST = {
     "backend/tests/test_publication_publish_normal_mode_integration.py": True,
 }
 
+RECONCILIATION_TEST = (
+    "backend/tests/"
+    "test_publication_reconciliation_postgres_integration.py"
+)
+
+RECONCILIATION_SUCCESS_MARKERS = (
+    "Real PostgreSQL reconciliation service integration: FULL PASS",
+    "Provider/Meta execution invoked: NO",
+)
+
+
+def _pytest_command(relative: str) -> tuple[str, ...]:
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+    ]
+
+    if relative == RECONCILIATION_TEST:
+        command.append("-s")
+
+    command.extend([
+        "--disable-warnings",
+        "-p",
+        "_test_isolation_plugin",
+        "-p",
+        "_v013h_legacy_target_compat",
+        relative.removeprefix("backend/"),
+    ])
+
+    return tuple(command)
+
+
+def _run_pytest(
+    executor,
+    *,
+    command: tuple[str, ...],
+    child_env: dict[str, str],
+    cwd: Path,
+    relative: str,
+) -> int:
+    reconciliation = (
+        relative == RECONCILIATION_TEST
+    )
+
+    allowed_returncodes = (
+        frozenset({5})
+        if reconciliation
+        else frozenset({0})
+    )
+
+    result = executor.run(
+        command,
+        env=child_env,
+        cwd=cwd,
+        allowed_returncodes=allowed_returncodes,
+    )
+
+    expected_returncode = (
+        5
+        if reconciliation
+        else 0
+    )
+
+    if result.returncode != expected_returncode:
+        raise RuntimeError(
+            "integration entrypoint returned "
+            "unexpected pytest return code"
+        )
+
+    if reconciliation:
+        lines = result.stdout.splitlines()
+
+        if any(
+            lines.count(marker) != 1
+            for marker
+            in RECONCILIATION_SUCCESS_MARKERS
+        ):
+            raise RuntimeError(
+                "reconciliation semantic success markers "
+                "are missing or duplicated"
+            )
+
+    return 0
+
 
 def _required(name: str) -> str:
     value = os.environ.get(name, "")
@@ -90,10 +176,15 @@ def main(argv: list[str]) -> int:
         print("INTEGRATION_RESOURCE_ATTESTATION=PASS " + " ".join(
             f"{key}={value}" for key, value in fields.items()
         ))
-    command = [sys.executable, "-m", "pytest", "-q", "--disable-warnings",
-               "-p", "_test_isolation_plugin", "-p", "_v013h_legacy_target_compat",
-               relative.removeprefix("backend/")]
-    return executor.run(command, env=child_env, cwd=root / "backend").returncode
+    command = _pytest_command(relative)
+
+    return _run_pytest(
+        executor,
+        command=command,
+        child_env=child_env,
+        cwd=root / "backend",
+        relative=relative,
+    )
 
 
 if __name__ == "__main__":
