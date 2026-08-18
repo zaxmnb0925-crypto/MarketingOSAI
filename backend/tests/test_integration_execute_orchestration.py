@@ -1248,3 +1248,139 @@ def test_inspect_template_is_missing_key_safe_for_hostconfig_tmpfs():
     assert ".Config.Env" not in argv[7]
     assert "POSTGRES_PASSWORD" not in argv[7]
     assert "POSTGRES_TEST_PASSWORD" not in argv[7]
+
+
+def _commit18_assert_inventory_collision(items, spec):
+    with pytest.raises(OrchestrationError) as error:
+        reject_inventory_collision(items, spec)
+    assert error.value.category is FailureClass.INVENTORY_COLLISION
+
+
+def test_commit18_allows_canonical_postgres_sibling_for_redis(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    reject_inventory_collision((item,), planned)
+
+
+def test_commit18_allows_canonical_redis_sibling_for_postgres(tmp_path):
+    planned = pg_spec(tmp_path)
+    sibling = redis_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "redis",
+    )
+    reject_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_exact_planned_container_name(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        planned.container_name,
+        "true",
+        "r22-fedcba9876543210",
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_same_run_same_resource_type(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "different-postgres-name",
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_same_run_unknown_resource_type(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "marketingos-unknown-resource",
+        "true",
+        RUN_ID,
+        "mysql",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_opposite_type_with_wrong_canonical_name(tmp_path):
+    planned = redis_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "wrong-postgres-sibling-name",
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_opposite_type_without_test_resource_label(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "false",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_more_than_one_same_run_sibling(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+
+    first = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+
+    second = InventoryItem(
+        "d" * 64,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+
+    _commit18_assert_inventory_collision(
+        (first, second),
+        planned,
+    )
+
+
+def test_commit18_allows_unrelated_labeled_resource(tmp_path):
+    planned = pg_spec(tmp_path)
+
+    item = InventoryItem(
+        CID,
+        "marketingos-r22-fedcba9876543210-postgres",
+        "true",
+        "r22-fedcba9876543210",
+        "postgres",
+    )
+
+    reject_inventory_collision(
+        (item,),
+        planned,
+    )

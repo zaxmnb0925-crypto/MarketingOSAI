@@ -160,11 +160,37 @@ def collect_inventory(executor: CommandExecutor) -> tuple[InventoryItem, ...]:
 
 
 def reject_inventory_collision(items: Sequence[InventoryItem], spec: DockerResourceSpec) -> None:
+    if spec.resource_type not in {"postgres", "redis"}:
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+    same_run = []
     for item in items:
-        if not isinstance(item.name, str) or not isinstance(item.run_id, str):
+        if (not isinstance(item.name, str) or
+                not isinstance(item.run_id, str) or
+                not isinstance(item.test_resource, str) or
+                not isinstance(item.resource_type, str)):
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
-        if item.name == spec.container_name or item.run_id == spec.run_id:
+
+        if item.name == spec.container_name:
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+        if item.run_id == spec.run_id:
+            same_run.append(item)
+
+    if not same_run:
+        return
+
+    if len(same_run) != 1:
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+    sibling = same_run[0]
+    opposite_type = "redis" if spec.resource_type == "postgres" else "postgres"
+    expected_sibling_name = f"marketingos-{spec.run_id}-{opposite_type}"
+
+    if (sibling.test_resource != "true" or
+            sibling.resource_type != opposite_type or
+            sibling.name != expected_sibling_name):
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
 
 
 def _inspect_argv(container_id: str) -> tuple[str, ...]:
