@@ -24,10 +24,12 @@ from _integration_resource_attestation import (
 )
 from _integration_resource_lifecycle import (
     DockerResourceSpec, build_docker_spec, create_resource_directories,
-    normalize_docker_observation, sanitized_subprocess_environment,
+    normalize_docker_observation, postgres_docker_env_file_path,
+    remove_postgres_docker_env_file, sanitized_subprocess_environment,
     require_empty_postgres_data_dir,
     run_temp_dir, sentinel_payload, validate_cleanup_path,
-    validate_run_cleanup_path, write_secure_json,
+    validate_run_cleanup_path, write_postgres_docker_env_file,
+    write_secure_json,
 )
 
 
@@ -65,24 +67,59 @@ def provision_resource(spec: DockerResourceSpec, *, executor: CommandExecutor,
     require_port_free(observe_listener(executor, spec.port)); states.append("PRE_PORT_FREE")
     child_environment = _child_env()
     generated_secret = ""
+    postgres_env_file = None
+
     if spec.resource_type == "postgres":
         try:
-            generated_secret = (secret_factory or (lambda: secrets.token_urlsafe(32)))()
+            generated_secret = (
+                secret_factory
+                or (lambda: secrets.token_urlsafe(32))
+            )()
         except Exception:
-            raise OrchestrationError(FailureClass.SECRET_GENERATION_FAILED) from None
-        if (not isinstance(generated_secret, str) or len(generated_secret) < 43 or
-                not generated_secret.isascii()):
-            raise OrchestrationError(FailureClass.SECRET_GENERATION_FAILED)
-        child_environment = _child_env({"POSTGRES_PASSWORD": generated_secret})
+            raise OrchestrationError(
+                FailureClass.SECRET_GENERATION_FAILED
+            ) from None
+
+        if (
+            not isinstance(generated_secret, str)
+            or len(generated_secret) < 43
+            or not generated_secret.isascii()
+        ):
+            raise OrchestrationError(
+                FailureClass.SECRET_GENERATION_FAILED
+            )
+
+        postgres_env_file = postgres_docker_env_file_path(
+            spec.run_id, approved_root
+        )
+
+        write_postgres_docker_env_file(
+            postgres_env_file,
+            generated_secret,
+            run_id=spec.run_id,
+            approved_root=approved_root,
+        )
+
     try:
-        created = executor.run(spec.argv, env=child_environment)
+        created = executor.run(
+            spec.argv,
+            env=child_environment,
+        )
     except Exception:
         raise _review_required(
-            FailureClass.CREATE_FAILED, boundary="CREATE_AMBIGUOUS_PRESERVE",
+            FailureClass.CREATE_FAILED,
+            boundary="CREATE_AMBIGUOUS_PRESERVE",
         ) from None
     finally:
-        child_environment.pop("POSTGRES_PASSWORD", None)
-        generated_secret = ""
+        try:
+            if postgres_env_file is not None:
+                remove_postgres_docker_env_file(
+                    postgres_env_file,
+                    run_id=spec.run_id,
+                    approved_root=approved_root,
+                )
+        finally:
+            generated_secret = ""
     container_id = created.stdout.strip()
     if not CONTAINER_ID_PATTERN.fullmatch(container_id):
         raise _review_required(

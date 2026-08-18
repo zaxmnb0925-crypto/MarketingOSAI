@@ -307,30 +307,121 @@ def test_successful_provision_orders_attestation_before_sentinel(tmp_path):
     assert Path(result["sentinel"]).stat().st_mode & 0o777 == 0o600
 
 
-def test_secret_generated_once_and_only_reaches_create_child(tmp_path, capsys):
-    spec, fake = fake_success(tmp_path); calls = []
+def test_secret_generated_once_and_only_reaches_transient_env_file(
+        tmp_path, capsys, monkeypatch):
+    spec, fake = fake_success(tmp_path)
+    calls = []
+    transport_events = []
+
+    real_write = flows.write_postgres_docker_env_file
+    real_remove = flows.remove_postgres_docker_env_file
+
     def generate():
         calls.append(True)
         return SYNTHETIC_SECRET
+
+    def tracked_write(path, password, **kwargs):
+        assert password == SYNTHETIC_SECRET
+
+        real_write(
+            path,
+            password,
+            **kwargs,
+        )
+
+        transport_events.append(
+            (
+                "written",
+                path,
+                path.read_text(encoding="ascii"),
+            )
+        )
+
+    def tracked_remove(path, **kwargs):
+        transport_events.append(
+            ("before_remove", path, path.exists())
+        )
+
+        real_remove(
+            path,
+            **kwargs,
+        )
+
+        transport_events.append(
+            ("removed", path, path.exists())
+        )
+
+    monkeypatch.setattr(
+        flows,
+        "write_postgres_docker_env_file",
+        tracked_write,
+    )
+    monkeypatch.setattr(
+        flows,
+        "remove_postgres_docker_env_file",
+        tracked_remove,
+    )
+
     result = provision_fast(
-        spec, executor=fake, approved_root=tmp_path / "approved",
+        spec,
+        executor=fake,
+        approved_root=tmp_path / "approved",
         secret_factory=generate,
     )
+
     assert len(calls) == 1
-    secret_calls = [(argv, kwargs) for argv, kwargs in fake.calls if
-                    kwargs.get("env", {}).get("POSTGRES_PASSWORD")]
-    assert len(secret_calls) == 1 and secret_calls[0][0] == spec.argv
-    argv, kwargs = secret_calls[0]
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert transport_events == [
+        (
+            "written",
+            transport,
+            f"POSTGRES_PASSWORD={SYNTHETIC_SECRET}" + chr(10),
+        ),
+        ("before_remove", transport, True),
+        ("removed", transport, False),
+    ]
+
+    create_calls = [
+        (argv, kwargs)
+        for argv, kwargs in fake.calls
+        if argv == spec.argv
+    ]
+
+    assert len(create_calls) == 1
+
+    argv, kwargs = create_calls[0]
+
     assert SYNTHETIC_SECRET not in " ".join(argv)
-    assert set(kwargs["env"]) == {"PATH", "LANG", "POSTGRES_PASSWORD"}
-    assert kwargs["env"]["POSTGRES_PASSWORD"] == SYNTHETIC_SECRET
-    assert SYNTHETIC_SECRET not in json.dumps(spec.sanitized_plan())
+    assert set(kwargs["env"]) == {"PATH", "LANG"}
+    assert "POSTGRES_PASSWORD" not in kwargs["env"]
+
+    assert not transport.exists()
+
+    assert SYNTHETIC_SECRET not in json.dumps(
+        spec.sanitized_plan()
+    )
     assert SYNTHETIC_SECRET not in json.dumps(result)
-    assert SYNTHETIC_SECRET not in Path(result["sentinel"]).read_text()
-    assert SYNTHETIC_SECRET not in (spec.temp_dir / "observation.json").read_text()
-    assert not [path for path in spec.temp_dir.iterdir() if path.is_file() and SYNTHETIC_SECRET in path.read_text()]
+    assert SYNTHETIC_SECRET not in Path(
+        result["sentinel"]
+    ).read_text()
+    assert SYNTHETIC_SECRET not in (
+        spec.temp_dir / "observation.json"
+    ).read_text()
+
+    assert not [
+        candidate
+        for candidate in spec.temp_dir.iterdir()
+        if candidate.is_file()
+        and SYNTHETIC_SECRET in candidate.read_text()
+    ]
+
     captured = capsys.readouterr()
-    assert SYNTHETIC_SECRET not in captured.out and SYNTHETIC_SECRET not in captured.err
+
+    assert SYNTHETIC_SECRET not in captured.out
+    assert SYNTHETIC_SECRET not in captured.err
+
 
 
 def test_default_csprng_is_invoked_once_with_32_bytes(tmp_path, monkeypatch):
@@ -825,3 +916,282 @@ def test_password_file_contract_has_no_plaintext_cli_and_preserves_env_rejection
     assert "--postgres-password=" not in script
     assert "POSTGRES_TEST_PASSWORD" in flow and "POSTGRES_PASSWORD" in flow
     assert "EXTERNAL_POSTGRES_SECRET_FORBIDDEN" in flow
+
+# R22 COMMIT16 RED PHASE — POSTGRES DOCKER SECRET TRANSPORT
+
+
+def test_postgres_secret_transport_red_spec_uses_run_scoped_env_file(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    expected_transport = spec.temp_dir / "postgres-docker.env"
+
+    assert "--env-file" in spec.argv, (
+        "RED_EXPECTED: PostgreSQL create must use --env-file"
+    )
+
+    index = spec.argv.index("--env-file")
+    assert index + 1 < len(spec.argv)
+    assert spec.argv[index + 1] == str(expected_transport)
+
+    assert "POSTGRES_PASSWORD" not in spec.argv
+    assert not any(
+        isinstance(token, str) and token.startswith("POSTGRES_PASSWORD=")
+        for token in spec.argv
+    )
+
+
+
+def test_postgres_secret_transport_red_create_child_env_has_no_password(tmp_path):
+    spec, fake = fake_success(tmp_path)
+
+    provision_fast(
+        spec,
+        executor=fake,
+        approved_root=tmp_path / "approved",
+        secret_factory=lambda: SYNTHETIC_SECRET,
+    )
+
+    create_calls = [
+        (argv, kwargs)
+        for argv, kwargs in fake.calls
+        if argv == spec.argv
+    ]
+
+    assert len(create_calls) == 1
+
+    _argv, kwargs = create_calls[0]
+    child_env = kwargs.get("env", {})
+
+    assert "POSTGRES_PASSWORD" not in child_env, (
+        "RED_EXPECTED: password must not cross sudo through subprocess env"
+    )
+    assert set(child_env) == {"PATH", "LANG"}
+
+
+def test_postgres_secret_transport_red_policy_accepts_exact_run_scoped_env_file(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    assert "--env-file" in spec.argv
+
+    env_file_index = spec.argv.index("--env-file")
+    assert spec.argv[env_file_index + 1] == str(
+        spec.temp_dir / "postgres-docker.env"
+    )
+
+    assert docker_subcommand(spec.argv) == "create", (
+        "Docker policy must accept the exact run-scoped "
+        "PostgreSQL env-file transport"
+    )
+
+    wrong_path = list(spec.argv)
+    wrong_path[env_file_index + 1] = str(
+        spec.temp_dir / "unexpected.env"
+    )
+
+    assert docker_subcommand(tuple(wrong_path)) is None, (
+        "Docker policy must reject any non-exact env-file path"
+    )
+
+# R22 COMMIT16 PHASE3C — TRANSPORT FAILURE PATHS
+
+
+def test_ambiguous_create_exception_removes_transport_before_preserve(tmp_path):
+    spec, fake = fake_success(tmp_path)
+    original = fake.handler
+
+    def handler(argv, kwargs, count):
+        if argv == spec.argv:
+            raise RuntimeError(
+                "synthetic-create-exception"
+            )
+
+        return original(
+            argv,
+            kwargs,
+            count,
+        )
+
+    fake.handler = handler
+
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(
+            spec,
+            executor=fake,
+            approved_root=tmp_path / "approved",
+            secret_factory=lambda: SYNTHETIC_SECRET,
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    )
+    assert (
+        error.value.original_category
+        is FailureClass.CREATE_FAILED
+    )
+    assert (
+        error.value.ownership_boundary
+        == "CREATE_AMBIGUOUS_PRESERVE"
+    )
+    assert error.value.resource_preserved is True
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert not transport.exists()
+    assert not any(
+        candidate.name.startswith(
+            ".postgres-docker.env."
+        )
+        for candidate in spec.temp_dir.iterdir()
+    )
+
+    assert SYNTHETIC_SECRET not in str(error.value)
+
+
+def test_nonzero_create_result_removes_transport_before_preserve(tmp_path):
+    spec, fake = fake_success(tmp_path)
+    original = fake.handler
+
+    def handler(argv, kwargs, count):
+        if argv == spec.argv:
+            return CommandResult(
+                1,
+                "",
+            )
+
+        return original(
+            argv,
+            kwargs,
+            count,
+        )
+
+    fake.handler = handler
+
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(
+            spec,
+            executor=fake,
+            approved_root=tmp_path / "approved",
+            secret_factory=lambda: SYNTHETIC_SECRET,
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    )
+    assert (
+        error.value.original_category
+        is FailureClass.CREATE_FAILED
+    )
+    assert (
+        error.value.ownership_boundary
+        == "CREATE_AMBIGUOUS_PRESERVE"
+    )
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert not transport.exists()
+    assert not any(
+        candidate.name.startswith(
+            ".postgres-docker.env."
+        )
+        for candidate in spec.temp_dir.iterdir()
+    )
+
+    assert SYNTHETIC_SECRET not in str(error.value)
+
+
+def test_redis_docker_policy_rejects_any_env_file(tmp_path):
+    spec = redis_spec(tmp_path)
+
+    candidate = list(spec.argv)
+    image_index = candidate.index(spec.image)
+
+    candidate[image_index:image_index] = [
+        "--env-file",
+        str(
+            spec.temp_dir
+            / "postgres-docker.env"
+        ),
+    ]
+
+    assert docker_subcommand(
+        tuple(candidate)
+    ) is None
+
+
+def test_postgres_execute_leaves_operator_password_file_unchanged(
+        tmp_path, monkeypatch):
+    password_path = _credential_file(
+        tmp_path,
+        monkeypatch,
+    )
+
+    before_bytes = password_path.read_bytes()
+    before_mode = (
+        password_path.stat(follow_symlinks=False).st_mode
+        & 0o777
+    )
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "provision_integration_resources_cleanroom.py"
+    )
+
+    def fake_provision(spec, *, executor, secret_factory):
+        assert secret_factory() == SYNTHETIC_SECRET
+
+        return {
+            "state": "READY",
+            "container_id": CID,
+            "secret_logged": False,
+        }
+
+    monkeypatch.setattr(
+        flows,
+        "provision_resource",
+        fake_provision,
+    )
+    monkeypatch.setattr(
+        "_integration_execute_flows.provision_resource",
+        fake_provision,
+    )
+    monkeypatch.setattr(
+        "_integration_execute_orchestration.SubprocessCommandExecutor",
+        lambda: object(),
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "postgres",
+            "--image",
+            PG_IMAGE,
+            "--port",
+            "15432",
+            "--run-id",
+            RUN_ID,
+            "--postgres-password-file",
+            str(password_path),
+            "--execute",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(
+            str(script),
+            run_name="__main__",
+        )
+
+    assert result.value.code == 0
+    assert password_path.read_bytes() == before_bytes
+    assert (
+        password_path.stat(
+            follow_symlinks=False
+        ).st_mode
+        & 0o777
+    ) == before_mode
+    assert before_mode == 0o600
