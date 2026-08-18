@@ -547,8 +547,37 @@ def test_migration_builds_exact_argv_cwd_and_scrubbed_env(tmp_path):
         runtime_password="runtime-only", executor=fake, approved_root=tmp_path / "approved")
     assert argv[-2:] == ("upgrade", "7c91e2f4b6a8") and cwd.name == "backend"
     assert env["DATABASE_URL"].startswith("postgresql+asyncpg://")
-    assert "POSTGRES_TEST_PASSWORD" not in env and set(env) <= {"PATH", "LANG", "DATABASE_URL",
-        "ENVIRONMENT", "MARKETINGOS_TEST_MODE", "MARKETINGOS_TEST_RESOURCE_SCOPE", "TEST_RUN_ID"}
+
+    expected_environment = {
+        "PATH",
+        "LANG",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "SECRET_KEY",
+        "OPENAI_API_KEY",
+        "OAUTH_TOKEN_ENCRYPTION_KEY",
+        "ENVIRONMENT",
+        "MARKETINGOS_TEST_MODE",
+        "MARKETINGOS_TEST_RESOURCE_SCOPE",
+        "TEST_RUN_ID",
+    }
+    assert set(env) == expected_environment
+
+    assert env["REDIS_URL"] == "redis://127.0.0.1:1/15"
+    assert env["SECRET_KEY"] == "test-only-synthetic-secret"
+    assert env["OPENAI_API_KEY"] == "test-only-not-a-live-key"
+    assert (
+        env["OAUTH_TOKEN_ENCRYPTION_KEY"]
+        == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+
+    assert env["ENVIRONMENT"] == "test"
+    assert env["MARKETINGOS_TEST_MODE"] == "integration"
+    assert env["MARKETINGOS_TEST_RESOURCE_SCOPE"] == "disposable"
+    assert env["TEST_RUN_ID"] == RUN_ID
+
+    assert "POSTGRES_TEST_PASSWORD" not in env
+    assert "POSTGRES_PASSWORD" not in env
 
 
 def test_migration_wrong_run_rejects_before_commands(tmp_path):
