@@ -2160,3 +2160,29 @@ def test_entrypoint_policy_reconciliation_marker_cardinality_is_exact():
 
 
 # R22_ENTRYPOINT_POLICY_FAKE_ONLY_END
+
+def test_create_policy_requires_explicit_pull_never(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    assert spec.argv[4:6] == ("--pull", "never")
+    assert spec.argv.count("--pull") == 1
+    assert docker_subcommand(spec.argv) == "create"
+
+    pull_index = spec.argv.index("--pull")
+
+    without_pull = (
+        spec.argv[:pull_index]
+        + spec.argv[pull_index + 2:]
+    )
+
+    assert docker_subcommand(without_pull) is None
+
+    default_missing = list(spec.argv)
+    default_missing[pull_index + 1] = "missing"
+
+    assert docker_subcommand(tuple(default_missing)) is None
+
+    always_pull = list(spec.argv)
+    always_pull[pull_index + 1] = "always"
+
+    assert docker_subcommand(tuple(always_pull)) is None

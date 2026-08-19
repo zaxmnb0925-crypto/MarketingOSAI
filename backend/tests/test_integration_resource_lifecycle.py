@@ -86,6 +86,8 @@ def test_malformed_digest_is_rejected():
 
 def test_postgres_spec_is_loopback_digest_pinned_and_secret_safe(tmp_path):
     value = spec(tmp_path)
+    assert value.argv[4:6] == ("--pull", "never")
+    assert value.argv.count("--pull") == 1
     assert "127.0.0.1:15432:5432" in value.argv
     assert "--env-file" in value.argv
     env_file_index = value.argv.index("--env-file")
@@ -105,6 +107,8 @@ def test_postgres_spec_is_loopback_digest_pinned_and_secret_safe(tmp_path):
 
 def test_redis_spec_disables_persistence_and_uses_nonzero_db(tmp_path):
     value = spec(tmp_path, "redis")
+    assert value.argv[4:6] == ("--pull", "never")
+    assert value.argv.count("--pull") == 1
     assert value.redis_db == 15
     assert ("--tmpfs", "/data:rw,size=67108864,mode=0700") == value.argv[
         value.argv.index("--tmpfs"):value.argv.index("--tmpfs") + 2

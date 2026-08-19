@@ -40,7 +40,7 @@ def _valid_docker_arguments(subcommand: str, arguments: tuple[object, ...]) -> b
     if subcommand != "create" or len(arguments) < 12:
         return False
     allowed_options = {
-        "--name", "--network", "--label", "--publish", "--mount",
+        "--pull", "--name", "--network", "--label", "--publish", "--mount",
         "--env", "--env-file", "--tmpfs",
     }
     index = 0
@@ -64,6 +64,7 @@ def _valid_docker_arguments(subcommand: str, arguments: tuple[object, ...]) -> b
     labels = values.get("--label", [])
     publishes = values.get("--publish", [])
     if (len(names) != 1 or re.fullmatch(r"marketingos-r22-[0-9a-f]{16}-(?:postgres|redis)", names[0]) is None
+            or values.get("--pull") != ["never"]
             or values.get("--network") != ["bridge"]
             or len(publishes) != 1
             or re.fullmatch(r"127\.0\.0\.1:[0-9]{4,5}:(?:5432|6379)", publishes[0]) is None

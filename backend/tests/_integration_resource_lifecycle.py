@@ -497,7 +497,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         DOCKER_LABELS["run"]: run_id,
         DOCKER_LABELS["type"]: resource_type,
     }
-    prefix = list(docker_command("create", "--name", name, "--network", "bridge"))
+    prefix = list(docker_command("create", "--pull", "never", "--name", name, "--network", "bridge"))
     for key, value in labels.items():
         prefix += ["--label", f"{key}={value}"]
     if resource_type == "postgres":
