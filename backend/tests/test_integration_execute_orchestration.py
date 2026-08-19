@@ -244,6 +244,292 @@ def test_executor_disallowed_returncode_exposes_integer_only(monkeypatch):
     assert "POSTGRES_TEST_PASSWORD" not in safe
 
 
+def test_executor_disallowed_returncode_retains_sanitized_bounded_diagnostic(
+        monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    oversized = (
+        "A" * (256 * 1024 + 4096)
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=(
+                "stdout-secret="
+                + synthetic_secret
+                + "\n"
+                + "\x1b"
+                + oversized
+            ),
+            stderr=(
+                "database="
+                + synthetic_url
+                + "\n"
+                + "Authorization: Bearer synthetic-token-value"
+            ),
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+                "POSTGRES_TEST_PASSWORD":
+                    synthetic_secret,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.COMMAND_RETURN_CODE_REJECTED
+    )
+
+    assert error.value.returncode == 7
+
+    diagnostic = error.value.diagnostic
+
+    assert diagnostic is not None
+    assert set(diagnostic) == {"stdout", "stderr"}
+
+    combined = (
+        diagnostic["stdout"]
+        + diagnostic["stderr"]
+    )
+
+    assert synthetic_secret not in combined
+    assert synthetic_url not in combined
+
+    assert "synthetic-token-value" not in combined
+    assert "<redacted>" in combined
+
+    assert "\x1b" not in combined
+
+    assert len(diagnostic["stdout"]) <= 256 * 1024
+    assert len(diagnostic["stderr"]) <= 256 * 1024
+
+    assert str(error.value) == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+    assert diagnostic["stdout"] not in str(error.value)
+    assert diagnostic["stderr"] not in str(error.value)
+
+
+def test_entrypoint_rejected_rc_emits_only_sanitized_diagnostic(
+        capsys):
+    import _integration_single_file_runner as single_runner
+
+    synthetic_secret = "runner-secret-must-not-appear"
+
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    class RejectingExecutor:
+        def run(self, *_args, **_kwargs):
+            raise OrchestrationError(
+                FailureClass.COMMAND_RETURN_CODE_REJECTED,
+                returncode=1,
+                diagnostic={
+                    "stdout":
+                        "child-stdout-secret="
+                        + synthetic_secret
+                        + "\n",
+                    "stderr":
+                        "child-database="
+                        + synthetic_url
+                        + "\n",
+                },
+            )
+
+    relative = (
+        "backend/tests/"
+        "test_publication_publish_http_integration.py"
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        single_runner._run_pytest(
+            RejectingExecutor(),
+            command=(
+                sys.executable,
+                "-m",
+                "pytest",
+            ),
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    assert error.value.returncode == 1
+
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+
+    assert (
+        "INTEGRATION_CHILD_STDOUT_BEGIN"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDOUT_END"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDERR_BEGIN"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDERR_END"
+        in captured.err
+    )
+
+    assert synthetic_secret not in captured.err
+    assert synthetic_url not in captured.err
+    assert "<redacted>" in captured.err
+
+
+def test_executor_rejected_rc_sanitizes_before_truncation_boundary(
+        monkeypatch):
+    from _integration_execute_orchestration import (
+        MAX_CAPTURE_BYTES,
+    )
+
+    env_secret = (
+        "R16F_BOUNDARY_ENV_SECRET_"
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    )
+
+    uri_secret = (
+        "R16F_BOUNDARY_URI_SECRET_"
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    )
+
+    database_url = (
+        "postgresql+asyncpg://synthetic:"
+        + uri_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    visible_env_chars = 8
+
+    stdout_padding = (
+        MAX_CAPTURE_BYTES
+        - visible_env_chars
+    )
+
+    stdout = (
+        "X" * stdout_padding
+        + env_secret
+        + ":after-boundary"
+    )
+
+    uri_prefix = (
+        "postgresql+asyncpg://synthetic:"
+    )
+
+    visible_uri_chars = 7
+
+    stderr_padding = (
+        MAX_CAPTURE_BYTES
+        - len(uri_prefix)
+        - visible_uri_chars
+    )
+
+    stderr = (
+        "Y" * stderr_padding
+        + database_url
+        + ":after-boundary"
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "POSTGRES_TEST_PASSWORD":
+                    env_secret,
+                "DATABASE_URL":
+                    database_url,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    diagnostic = error.value.diagnostic
+
+    assert diagnostic is not None
+
+    combined = (
+        diagnostic["stdout"]
+        + diagnostic["stderr"]
+    )
+
+    assert env_secret not in combined
+    assert uri_secret not in combined
+    assert database_url not in combined
+
+    assert (
+        env_secret[:visible_env_chars]
+        not in diagnostic["stdout"]
+    )
+
+    assert (
+        uri_secret[:visible_uri_chars]
+        not in diagnostic["stderr"]
+    )
+
+    assert len(diagnostic["stdout"]) <= MAX_CAPTURE_BYTES
+    assert len(diagnostic["stderr"]) <= MAX_CAPTURE_BYTES
+
+    assert str(error.value) == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+
 def test_executor_allowed_nonzero_returncode_still_returns_result(monkeypatch):
     def fake_run(command, **_kwargs):
         return subprocess.CompletedProcess(

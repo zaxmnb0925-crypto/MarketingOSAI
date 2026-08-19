@@ -6,7 +6,11 @@ from pathlib import Path
 import sys
 
 from _integration_execute_flows import assert_same_run_resources
-from _integration_execute_orchestration import SubprocessCommandExecutor
+from _integration_execute_orchestration import (
+    OrchestrationError,
+    SubprocessCommandExecutor,
+    safe_subprocess_diagnostic,
+)
 from _integration_live_attestation import attest_live_resource
 from _integration_resource_attestation import (
     reconstruct_database_url, reconstruct_redis_url, safe_diagnostic,
@@ -54,6 +58,46 @@ def _pytest_command(relative: str) -> tuple[str, ...]:
     return tuple(command)
 
 
+def _emit_command_diagnostic(
+    error: OrchestrationError,
+    *,
+    child_env: dict[str, str],
+) -> None:
+    diagnostic = error.diagnostic
+
+    if not diagnostic:
+        return
+
+    safe = safe_subprocess_diagnostic(
+        diagnostic.get("stdout", ""),
+        diagnostic.get("stderr", ""),
+        child_env,
+    )
+
+    for stream in ("stdout", "stderr"):
+        value = safe[stream]
+
+        if not value:
+            continue
+
+        label = stream.upper()
+
+        print(
+            f"INTEGRATION_CHILD_{label}_BEGIN",
+            file=sys.stderr,
+        )
+
+        sys.stderr.write(value)
+
+        if not value.endswith("\n"):
+            sys.stderr.write("\n")
+
+        print(
+            f"INTEGRATION_CHILD_{label}_END",
+            file=sys.stderr,
+        )
+
+
 def _run_pytest(
     executor,
     *,
@@ -72,12 +116,19 @@ def _run_pytest(
         else frozenset({0})
     )
 
-    result = executor.run(
-        command,
-        env=child_env,
-        cwd=cwd,
-        allowed_returncodes=allowed_returncodes,
-    )
+    try:
+        result = executor.run(
+            command,
+            env=child_env,
+            cwd=cwd,
+            allowed_returncodes=allowed_returncodes,
+        )
+    except OrchestrationError as error:
+        _emit_command_diagnostic(
+            error,
+            child_env=child_env,
+        )
+        raise
 
     expected_returncode = (
         5

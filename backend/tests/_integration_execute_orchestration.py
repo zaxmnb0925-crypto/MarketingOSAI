@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from urllib.parse import unquote, urlsplit
 import time
 import sys
 from typing import Mapping, Protocol, Sequence
@@ -62,11 +63,13 @@ class OrchestrationError(RuntimeError):
     def __init__(self, category: FailureClass, *, resource_preserved: bool = True,
                  ownership_boundary: str | None = None,
                  original_category: FailureClass | None = None,
-                 returncode: int | None = None):
+                 returncode: int | None = None,
+                 diagnostic: Mapping[str, str] | None = None):
         self.category, self.resource_preserved = category, resource_preserved
         self.ownership_boundary = ownership_boundary
         self.original_category = original_category
         self.returncode = returncode
+        self.diagnostic = dict(diagnostic) if diagnostic is not None else None
         message = category.value
         if returncode is not None:
             message += f": returncode={returncode}"
@@ -78,6 +81,130 @@ class CommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+_SENSITIVE_ENV_NAME_PARTS = (
+    "PASSWORD",
+    "SECRET",
+    "TOKEN",
+    "AUTHORIZATION",
+    "API_KEY",
+)
+
+_URL_ENV_NAMES = frozenset({
+    "DATABASE_URL",
+    "REDIS_URL",
+})
+
+_URI_CREDENTIAL_PATTERN = re.compile(
+    r"([A-Za-z][A-Za-z0-9+.-]*://[^:\s/@]+):[^@\s/]+@"
+)
+
+_BEARER_PATTERN = re.compile(
+    r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"
+)
+
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b("
+    r"password|passwd|secret|token|authorization|"
+    r"api[_-]?key|database_url|redis_url"
+    r")(\s*[:=]\s*)([^\s,;]+)"
+)
+
+_CONTROL_CHARACTER_PATTERN = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+)
+
+
+def _sensitive_environment_values(
+        env: Mapping[str, str] | None) -> tuple[str, ...]:
+    values: set[str] = set()
+
+    for name, value in (env or {}).items():
+        if not isinstance(value, str) or not value:
+            continue
+
+        upper = name.upper()
+
+        if upper in _URL_ENV_NAMES:
+            try:
+                password = urlsplit(value).password
+            except ValueError:
+                password = None
+
+            if password:
+                values.add(password)
+                values.add(unquote(password))
+
+            continue
+
+        if any(
+            part in upper
+            for part in _SENSITIVE_ENV_NAME_PARTS
+        ):
+            values.add(value)
+
+    return tuple(
+        sorted(
+            (value for value in values if value),
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _sanitize_subprocess_output(
+        value: str,
+        env: Mapping[str, str] | None,
+) -> str:
+    sanitized = _URI_CREDENTIAL_PATTERN.sub(
+        r"\1:<redacted>@",
+        value,
+    )
+
+    sanitized = _BEARER_PATTERN.sub(
+        "Bearer <redacted>",
+        sanitized,
+    )
+
+    for secret in _sensitive_environment_values(env):
+        sanitized = sanitized.replace(
+            secret,
+            "<redacted>",
+        )
+
+    sanitized = _SECRET_ASSIGNMENT_PATTERN.sub(
+        lambda match: (
+            match.group(1)
+            + match.group(2)
+            + "<redacted>"
+        ),
+        sanitized,
+    )
+
+    sanitized = _CONTROL_CHARACTER_PATTERN.sub(
+        "<control>",
+        sanitized,
+    )
+
+    return sanitized[:MAX_CAPTURE_BYTES]
+
+
+def safe_subprocess_diagnostic(
+        stdout: str,
+        stderr: str,
+        env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    return {
+        "stdout": _sanitize_subprocess_output(
+            stdout,
+            env,
+        ),
+        "stderr": _sanitize_subprocess_output(
+            stderr,
+            env,
+        ),
+    }
 
 
 class CommandExecutor(Protocol):
@@ -115,6 +242,11 @@ class SubprocessCommandExecutor:
             raise OrchestrationError(
                 FailureClass.COMMAND_RETURN_CODE_REJECTED,
                 returncode=result.returncode,
+                diagnostic=safe_subprocess_diagnostic(
+                    completed.stdout,
+                    completed.stderr,
+                    env,
+                ),
             )
         return result
 
