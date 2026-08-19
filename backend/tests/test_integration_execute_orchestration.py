@@ -2186,3 +2186,223 @@ def test_create_policy_requires_explicit_pull_never(tmp_path):
     always_pull[pull_index + 1] = "always"
 
     assert docker_subcommand(tuple(always_pull)) is None
+
+# R18CW_BEGIN_CANONICAL_CHILD_PYTHONPATH_CONTRACT
+def test_single_file_runner_derives_canonical_pythonpath_without_ambient_inheritance(
+        monkeypatch):
+    import _integration_single_file_runner as single_runner
+
+    root = (
+        Path(single_runner.__file__)
+        .resolve()
+        .parents[2]
+    )
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    requested = (
+        root
+        / relative
+    )
+
+    class FakeAttestation:
+        resource_run_id = RUN_ID
+
+    captured = {}
+
+    monkeypatch.setenv(
+        "RESOURCE_RUN_ID",
+        RUN_ID,
+    )
+
+    monkeypatch.setenv(
+        "TEST_RUN_ID",
+        RUN_ID,
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_SENTINEL_PATH",
+        "/tmp/r18cw-synthetic-sentinel.json",
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_IMAGE_REFERENCE",
+        PG_IMAGE,
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_TEST_PASSWORD",
+        SYNTHETIC_SECRET,
+    )
+
+    ambient_pythonpath = (
+        "/tmp/r18cw-operator-pythonpath-a"
+        ":"
+        "/tmp/r18cw-operator-pythonpath-b"
+    )
+
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        ambient_pythonpath,
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "SubprocessCommandExecutor",
+        lambda: object(),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "attest_live_resource",
+        lambda **_kwargs: FakeAttestation(),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "reconstruct_database_url",
+        lambda _resource, _password: (
+            "postgresql+asyncpg://"
+            "synthetic@127.0.0.1:1/"
+            "marketingos_test_fake"
+        ),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "validate_test_environment",
+        lambda: None,
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "safe_diagnostic",
+        lambda *_args, **_kwargs: {},
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "assert_same_run_resources",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run_pytest(
+            executor,
+            *,
+            command,
+            child_env,
+            cwd,
+            relative):
+        captured["executor"] = executor
+        captured["command"] = tuple(command)
+        captured["child_env"] = dict(child_env)
+        captured["cwd"] = cwd
+        captured["relative"] = relative
+        return 0
+
+    monkeypatch.setattr(
+        single_runner,
+        "_run_pytest",
+        fake_run_pytest,
+    )
+
+    result = single_runner.main(
+        [
+            str(requested),
+            "false",
+        ]
+    )
+
+    assert result == 0
+
+    expected_pythonpath = (
+        single_runner.os.pathsep.join(
+            (
+                str(root / "backend"),
+                str(root / "backend" / "tests"),
+            )
+        )
+    )
+
+    child_env = captured[
+        "child_env"
+    ]
+
+    assert child_env[
+        "PYTHONPATH"
+    ] == expected_pythonpath
+
+    assert (
+        ambient_pythonpath
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "/tmp/r18cw-operator-pythonpath-a"
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "/tmp/r18cw-operator-pythonpath-b"
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "POSTGRES_TEST_PASSWORD"
+        not in child_env
+    )
+
+    assert child_env[
+        "DATABASE_URL"
+    ] == (
+        "postgresql+asyncpg://"
+        "synthetic@127.0.0.1:1/"
+        "marketingos_test_fake"
+    )
+
+    assert child_env[
+        "REDIS_URL"
+    ] == "redis://127.0.0.1:1/15"
+
+    assert captured[
+        "cwd"
+    ] == root / "backend"
+
+    assert captured[
+        "relative"
+    ] == relative
+
+    command = captured[
+        "command"
+    ]
+
+    first_plugin = command.index(
+        "-p"
+    )
+
+    second_plugin = command.index(
+        "-p",
+        first_plugin + 1,
+    )
+
+    assert command[
+        first_plugin + 1
+    ] == "_test_isolation_plugin"
+
+    assert command[
+        second_plugin + 1
+    ] == "_v013h_legacy_target_compat"
+
+    assert command.count(
+        "-p"
+    ) == 2
+# R18CW_END_CANONICAL_CHILD_PYTHONPATH_CONTRACT

@@ -197,6 +197,10 @@ def main(argv: list[str]) -> int:
         "META_PUBLISH_TRANSPORT_ENABLED": "false",
         "META_PUBLISH_CANARY_MODE_ENABLED": "true",
     })
+    child_env["PYTHONPATH"] = os.pathsep.join((
+        str(root / "backend"),
+        str(root / "backend" / "tests"),
+    ))
     child_env["DATABASE_URL"] = reconstruct_database_url(
         postgres, _required("POSTGRES_TEST_PASSWORD")
     )
