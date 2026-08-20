@@ -55,6 +55,7 @@ from .common import (
     status,
     verify_and_consume_publication_activation_for_execution,
 )
+from app.core.rate_limit import enforce_rate_limit
 
 @router.post(
     "/{publication_id}/publish-confirmation",
@@ -168,6 +169,15 @@ async def publish_publication_endpoint(
     # Authorization occurs before revealing whether real
     # provider execution is enabled.
     #
+    await enforce_rate_limit(
+        scope="publish",
+        identifiers=(
+            str(current_user.id),
+            str(workspace_id),
+        ),
+        limit=5,
+        window_seconds=60,
+    )
     await require_workspace_publish(
         db,
         current_user,

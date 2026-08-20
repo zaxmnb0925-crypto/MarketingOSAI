@@ -18,7 +18,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant">
-      <body>{children}</body>
+      <body>{children}
+        <footer className="border-t px-6 py-4 text-center text-sm text-neutral-500">
+          <a
+            href="/privacy"
+            className="underline underline-offset-4 hover:text-neutral-900"
+          >
+            Privacy Policy
+          </a>
+        </footer>
+      </body>
     </html>
   );
 }

@@ -32,6 +32,7 @@ from app.schemas.auth import (
     UserResponse,
     WorkspaceResponse,
 )
+from app.core.rate_limit import enforce_rate_limit, normalized_login_identifier_hash
 
 
 router = APIRouter(
@@ -164,6 +165,16 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
 
+    await enforce_rate_limit(
+        scope="login",
+        identifiers=(
+            normalized_login_identifier_hash(
+                payload.email
+            ),
+        ),
+        limit=10,
+        window_seconds=600,
+    )
     email = normalize_email(
         str(payload.email)
     )

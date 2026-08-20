@@ -42,6 +42,7 @@ from app.services.content_prompt import (
     build_brand_prompt,
     detect_forbidden_words,
 )
+from app.core.rate_limit import enforce_rate_limit
 
 
 router = APIRouter(
@@ -232,6 +233,15 @@ async def generate_content(
     db: AsyncSession = Depends(get_db),
 ):
 
+    await enforce_rate_limit(
+        scope="ai_generation",
+        identifiers=(
+            str(current_user.id),
+            str(workspace_id),
+        ),
+        limit=10,
+        window_seconds=60,
+    )
     await require_workspace_write(
         db,
         current_user,
