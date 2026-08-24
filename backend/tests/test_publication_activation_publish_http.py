@@ -5,6 +5,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.responses import Response
 
+from app.core.rate_limit import (
+    enforce_rate_limit as application_enforce_rate_limit,
+)
+
 import sys as _publication_compat_sys
 from pathlib import Path as _publication_compat_Path
 
@@ -84,6 +88,7 @@ def payload():
 
 async def main():
     originals = (
+        application_enforce_rate_limit,
         publications.require_workspace_publish,
         publications.get_publication_publish_transport,
         publications.verify_and_consume_publication_activation_for_execution,
@@ -92,6 +97,9 @@ async def main():
     )
 
     trace = []
+
+    async def allow_rate_limit(**kwargs):
+        return None
 
     async def authorize(
         db,
@@ -166,6 +174,10 @@ async def main():
         )
 
     try:
+        publications.enforce_rate_limit = (
+            allow_rate_limit
+        )
+
         publications.require_workspace_publish = (
             authorize
         )
@@ -297,6 +309,7 @@ async def main():
 
     finally:
         (
+            publications.enforce_rate_limit,
             publications.require_workspace_publish,
             publications.get_publication_publish_transport,
             publications.verify_and_consume_publication_activation_for_execution,

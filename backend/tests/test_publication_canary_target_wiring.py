@@ -6,6 +6,10 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException, Response
 
+from app.core.rate_limit import (
+    enforce_rate_limit as application_enforce_rate_limit,
+)
+
 import sys as _publication_compat_sys
 from pathlib import Path as _publication_compat_Path
 
@@ -290,6 +294,8 @@ async def runtime_gate():
     )
 
     pub_originals = {
+        "rate_limit":
+            application_enforce_rate_limit,
         "publish_auth":
             publications.require_workspace_publish,
         "activation_auth":
@@ -323,6 +329,9 @@ async def runtime_gate():
         "exec_dry": 0,
         "exec_consume": 0,
     }
+
+    async def allow_rate_limit(**kwargs):
+        return None
 
     async def auth(
         db,
@@ -379,6 +388,7 @@ async def runtime_gate():
     ):
         counts["exec_consume"] += 1
 
+    publications.enforce_rate_limit = allow_rate_limit
     publications.require_workspace_publish = auth
     publications.require_workspace_publish_activation = auth
     publications.build_publication_meta_dry_run = dry_run
@@ -572,6 +582,10 @@ async def runtime_gate():
 
         settings.meta_publish_canary_publication_id = (
             original_publication
+        )
+
+        publications.enforce_rate_limit = (
+            pub_originals["rate_limit"]
         )
 
         publications.require_workspace_publish = (
