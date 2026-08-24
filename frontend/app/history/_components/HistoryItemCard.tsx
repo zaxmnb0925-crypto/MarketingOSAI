@@ -67,49 +67,6 @@ export function HistoryItemCard({
                       </div>
                     </div>
 
-                    <div className="history-meta-grid">
-                      <div>
-                        <span>
-                          Model
-                        </span>
-                        <strong>
-                          {item.model ||
-                            "—"}
-                        </strong>
-                      </div>
-
-                      <div>
-                        <span>
-                          Input
-                        </span>
-                        <strong>
-                          {item.input_tokens ??
-                            "—"}
-                        </strong>
-                      </div>
-
-                      <div>
-                        <span>
-                          Output
-                        </span>
-                        <strong>
-                          {item.output_tokens ??
-                            "—"}
-                        </strong>
-                      </div>
-
-                      <div>
-                        <span>
-                          Cost
-                        </span>
-                        <strong>
-                          {item.estimated_cost_usd
-                            ? `US$${item.estimated_cost_usd}`
-                            : "—"}
-                        </strong>
-                      </div>
-                    </div>
-
                     {item.status ===
                       "completed" &&
                     item.generated_content ? (
@@ -162,8 +119,7 @@ export function HistoryItemCard({
                     {item.status ===
                       "failed" ? (
                       <div className="history-error-box">
-                        {item.error_message ||
-                          "此任務執行失敗。"}
+                        此任務執行失敗。
                       </div>
                     ) : null}
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -40,11 +41,24 @@ class ContentGenerationResponse(BaseModel):
     error_message: str | None
 
 
+class CustomerContentGenerationResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    brand_id: UUID
+    platform: ContentPlatform
+    topic: str
+    objective: str | None
+    status: ContentStatus
+    generated_content: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PromptPreviewResponse(BaseModel):
-    generation: ContentGenerationResponse
+    generation: CustomerContentGenerationResponse
     forbidden_word_hits: list[str]
 
 
 class GenerateContentResponse(BaseModel):
-    generation: ContentGenerationResponse
+    generation: CustomerContentGenerationResponse
     forbidden_word_hits: list[str]

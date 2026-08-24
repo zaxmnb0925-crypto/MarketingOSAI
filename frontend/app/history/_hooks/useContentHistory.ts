@@ -105,14 +105,7 @@ const [
     ).length;
 
 
-  const totalTokens =
-    items.reduce(
-      (sum, item) =>
-        sum +
-        (item.input_tokens || 0) +
-        (item.output_tokens || 0),
-      0,
-    );
+
 
   return {
     workspace,
@@ -139,6 +132,5 @@ const [
     completedCount,
     failedCount,
     pendingCount,
-    totalTokens,
   };
 }

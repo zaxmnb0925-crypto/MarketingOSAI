@@ -41,10 +41,6 @@ type GenerateResponse = {
     id: string;
     status: string;
     generated_content: string | null;
-    model: string | null;
-    input_tokens: number | null;
-    output_tokens: number | null;
-    estimated_cost_usd: string | null;
   };
 
   forbidden_word_hits: string[];
@@ -460,7 +456,7 @@ export default function CreatePage() {
             >
               {generating
                 ? "AI 正在生成..."
-                : "生成文案 · 1 Credit"}
+                : "生成文案"}
             </button>
           </form>
 
@@ -496,40 +492,6 @@ export default function CreatePage() {
                     result.generation
                       .generated_content
                   }
-                </div>
-
-                <div className="generation-meta">
-                  <span>
-                    Model：
-                    {
-                      result.generation
-                        .model
-                    }
-                  </span>
-
-                  <span>
-                    Input：
-                    {
-                      result.generation
-                        .input_tokens
-                    }
-                  </span>
-
-                  <span>
-                    Output：
-                    {
-                      result.generation
-                        .output_tokens
-                    }
-                  </span>
-
-                  <span>
-                    Cost：US$
-                    {
-                      result.generation
-                        .estimated_cost_usd
-                    }
-                  </span>
                 </div>
 
                 <button
