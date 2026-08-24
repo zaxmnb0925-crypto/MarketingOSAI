@@ -161,6 +161,11 @@ class WorkspaceSubscription(Base):
                 "canonical_status"
             ),
         ),
+        CheckConstraint(
+            "((plan_code = 'free' AND expires_at IS NULL) OR "
+            "(plan_code <> 'free' AND expires_at IS NOT NULL))",
+            name="ck_workspace_subscriptions_commercial_expiry",
+        ),
     )
 
     workspace_id: Mapped[
@@ -194,9 +199,11 @@ class WorkspaceSubscription(Base):
         nullable=False,
     )
 
-    expires_at: Mapped[datetime] = mapped_column(
+    expires_at: Mapped[
+        datetime | None
+    ] = mapped_column(
         DateTime(timezone=True),
-        nullable=False,
+        nullable=True,
     )
 
     activated_at: Mapped[
