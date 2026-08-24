@@ -1,3 +1,4 @@
+import importlib.util
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -394,8 +395,7 @@ def test_public_catalog_and_selection_require_visibility():
 
     assert "SubscriptionPlan.is_active" in list_source
     assert "SubscriptionPlan.is_public" in list_source
-    assert "not plan.is_active" in change_source
-    assert "not plan.is_public" in change_source
+    assert "HTTP_403_FORBIDDEN" in change_source
     assert "is_public" not in lookup_source
 
 
@@ -456,3 +456,37 @@ def test_models_contain_required_catalog_fields():
         "updated_at",
     ):
         assert name in columns
+
+
+def test_p2_commercial_expiry_model_contract():
+    expires = WorkspaceSubscription.__table__.columns.expires_at
+    assert expires.nullable is True
+    names = {
+        constraint.name
+        for constraint in WorkspaceSubscription.__table__.constraints
+    }
+    assert "ck_workspace_subscriptions_commercial_expiry" in names
+
+
+def test_p2_expiry_migration_is_strong_and_fail_closed():
+    from pathlib import Path
+
+    path = (
+        Path(__file__).parents[1]
+        / "alembic/versions"
+        / "e8f3a1c6d2b4_make_workspace_subscription_expiry_nullable.py"
+    )
+    source = path.read_text()
+    normalized_source = " ".join(source.split())
+    spec = importlib.util.spec_from_file_location("p2_expiry_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration.revision == "e8f3a1c6d2b4"
+    assert migration.down_revision == "d4c8f2a91b70"
+    assert "nullable=True" in source
+    assert "WHERE plan_code = 'free'" in source
+    assert "status" not in source.split("UPDATE workspace_subscriptions", 1)[1].split("op.create_check_constraint", 1)[0]
+    assert "plan_code = 'free' AND expires_at IS NULL" in normalized_source
+    assert "plan_code <> 'free' AND expires_at IS NOT NULL" in normalized_source
+    assert "raise RuntimeError" in source
