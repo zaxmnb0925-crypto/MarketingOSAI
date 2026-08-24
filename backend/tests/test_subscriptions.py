@@ -6,6 +6,9 @@ from app.schemas.subscription import (
     ChangePlanRequest,
 )
 from app.services import subscriptions
+from app.services.subscriptions import (
+    SubscriptionCatalogConfigurationError,
+)
 
 
 def test_add_one_month_preserves_safe_day():
@@ -43,6 +46,16 @@ def test_subscription_cycle_is_workspace_scoped():
 
     assert "workspace_id" in source
     assert "account" in source
+
+
+def test_catalog_is_migration_owned():
+    source = inspect.getsource(
+        subscriptions.ensure_default_plans
+    )
+
+    assert "insert(" not in source
+    assert "on_conflict" not in source
+    assert "SubscriptionCatalogConfigurationError" in source
 
 
 def test_plan_change_requires_workspace_gate():
