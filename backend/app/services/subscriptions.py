@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.subscription import (
@@ -12,38 +11,17 @@ from app.models.subscription import (
 )
 
 
-PLAN_DEFINITIONS = [
-    {
-        "code": "free",
-        "name": "Free",
-        "price_twd": 0,
-        "monthly_credits": 20,
-    },
-    {
-        "code": "starter",
-        "name": "Starter",
-        "price_twd": 590,
-        "monthly_credits": 300,
-    },
-    {
-        "code": "pro",
-        "name": "Pro",
-        "price_twd": 1490,
-        "monthly_credits": 1000,
-    },
-    {
-        "code": "business",
-        "name": "Business",
-        "price_twd": 2990,
-        "monthly_credits": 2500,
-    },
-    {
-        "code": "agency",
-        "name": "Agency",
-        "price_twd": 6990,
-        "monthly_credits": 7500,
-    },
-]
+REQUIRED_CATALOG_PLAN_CODES = (
+    "free",
+    "pro",
+    "business",
+)
+
+
+class SubscriptionCatalogConfigurationError(
+    RuntimeError
+):
+    pass
 
 
 def utcnow():
@@ -78,30 +56,35 @@ def add_one_month(value: datetime) -> datetime:
 async def ensure_default_plans(
     db: AsyncSession,
 ) -> None:
+    """
+    Verify the migration-owned catalog invariant.
 
-    for plan in PLAN_DEFINITIONS:
-
-        stmt = (
-            insert(SubscriptionPlan)
-            .values(
-                **plan,
-                is_active=True,
-                created_at=utcnow(),
-            )
-            .on_conflict_do_update(
-                index_elements=["code"],
-                set_={
-                    "name": plan["name"],
-                    "price_twd": plan["price_twd"],
-                    "monthly_credits": (
-                        plan["monthly_credits"]
-                    ),
-                    "is_active": True,
-                },
+    Retain the historical function name for current
+    callers while removing all request-time catalog
+    insertion and price mutation.
+    """
+    result = await db.execute(
+        select(SubscriptionPlan.code).where(
+            SubscriptionPlan.code.in_(
+                REQUIRED_CATALOG_PLAN_CODES
             )
         )
+    )
 
-        await db.execute(stmt)
+    available = set(
+        result.scalars().all()
+    )
+
+    missing = (
+        set(REQUIRED_CATALOG_PLAN_CODES)
+        - available
+    )
+
+    if missing:
+        raise SubscriptionCatalogConfigurationError(
+            "Required subscription catalog "
+            "is not configured"
+        )
 
 
 async def get_plan(
@@ -157,10 +140,25 @@ async def ensure_subscription_cycle(
 
         cycle_end = add_one_month(now)
 
+        #
+        # Transitional compatibility only:
+        # deterministic registration-time provisioning
+        # moves to P2. Existing lazy cycle creation remains
+        # until that patch, but the Plan row itself must
+        # already exist from the migration.
+        #
         subscription = WorkspaceSubscription(
             workspace_id=workspace_id,
             plan_code="free",
             status="active",
+            starts_at=now,
+            expires_at=cycle_end,
+            activated_at=now,
+            source="system",
+            entitlement_version=1,
+            renewal_price_minor=0,
+            billing_currency="TWD",
+            pricing_source="free",
             cycle_start=now,
             cycle_end=cycle_end,
             credits_granted=(
@@ -194,6 +192,9 @@ async def ensure_subscription_cycle(
         subscription.cycle_start = now
         subscription.cycle_end = (
             add_one_month(now)
+        )
+        subscription.expires_at = (
+            subscription.cycle_end
         )
 
         subscription.credits_granted = (

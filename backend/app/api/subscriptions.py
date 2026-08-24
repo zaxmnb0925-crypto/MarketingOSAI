@@ -61,7 +61,10 @@ async def list_plans(
         .where(
             SubscriptionPlan.is_active.is_(
                 True
-            )
+            ),
+            SubscriptionPlan.is_public.is_(
+                True
+            ),
         )
         .order_by(
             SubscriptionPlan.price_twd
@@ -171,6 +174,7 @@ async def change_workspace_plan(
     if (
         plan is None
         or not plan.is_active
+        or not plan.is_public
     ):
         raise HTTPException(
             status_code=404,

@@ -24,9 +24,32 @@ __all__ = [
 from app.models.ai_credit import AICreditLedger, WorkspaceCreditAccount
 
 from app.models.subscription import (
+    PlanEntitlement,
+    SubscriptionStatus,
     SubscriptionPlan,
     WorkspaceSubscription,
 )
+from app.models.commercial import (
+    AdminSubscriptionAudit,
+    PaymentRecord,
+    PaymentStatus,
+    PlatformAdminMembership,
+    PlatformAdminRole,
+)
+
+__all__.extend([
+    "AICreditLedger",
+    "WorkspaceCreditAccount",
+    "PlanEntitlement",
+    "SubscriptionStatus",
+    "SubscriptionPlan",
+    "WorkspaceSubscription",
+    "AdminSubscriptionAudit",
+    "PaymentRecord",
+    "PaymentStatus",
+    "PlatformAdminMembership",
+    "PlatformAdminRole",
+])
 
 from app.models.social_account import (
     SocialAccount,
