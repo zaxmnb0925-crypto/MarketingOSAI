@@ -24,6 +24,7 @@ from app.models.user import User
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
+    CustomerContentGenerationResponse,
     GenerateContentResponse,
     PromptPreviewResponse,
 )
@@ -72,6 +73,23 @@ def serialize_generation(
         output_tokens=item.output_tokens,
         estimated_cost_usd=item.estimated_cost_usd,
         error_message=item.error_message,
+    )
+
+
+def serialize_customer_generation(
+    item: ContentGeneration,
+) -> CustomerContentGenerationResponse:
+    return CustomerContentGenerationResponse(
+        id=item.id,
+        workspace_id=item.workspace_id,
+        brand_id=item.brand_id,
+        platform=item.platform,
+        topic=item.topic,
+        objective=item.objective,
+        status=item.status,
+        generated_content=item.generated_content,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
     )
 
 
@@ -164,7 +182,7 @@ async def preview_content(
     await db.refresh(generation)
 
     return PromptPreviewResponse(
-        generation=serialize_generation(
+        generation=serialize_customer_generation(
             generation
         ),
         forbidden_word_hits=forbidden_hits,
@@ -174,7 +192,7 @@ async def preview_content(
 @router.get(
     "",
     response_model=list[
-        ContentGenerationResponse
+        CustomerContentGenerationResponse
     ],
 )
 async def list_content_generations(
@@ -212,7 +230,7 @@ async def list_content_generations(
     )
 
     return [
-        serialize_generation(item)
+        serialize_customer_generation(item)
         for item in result.scalars().all()
     ]
 
@@ -317,14 +335,7 @@ async def generate_content(
 
         raise HTTPException(
             status_code=402,
-            detail={
-                "message": (
-                    "Insufficient AI credits"
-                ),
-                "required": (
-                    CONTENT_GENERATION_CREDITS
-                ),
-            },
+            detail="Generation is currently unavailable",
         )
     except AICreditAccountingConflict:
         await db.rollback()
@@ -352,7 +363,7 @@ async def generate_content(
 
         raise HTTPException(
             status_code=409,
-            detail="AI credit accounting conflict",
+            detail="Generation request could not be completed",
         )
 
     try:
@@ -420,7 +431,7 @@ async def generate_content(
         await db.refresh(generation)
 
         return GenerateContentResponse(
-            generation=serialize_generation(
+            generation=serialize_customer_generation(
                 generation
             ),
             forbidden_word_hits=(
@@ -436,7 +447,7 @@ async def generate_content(
 
         raise HTTPException(
             status_code=409,
-            detail="AI credit accounting conflict",
+            detail="Generation request could not be completed",
         )
 
     except Exception:

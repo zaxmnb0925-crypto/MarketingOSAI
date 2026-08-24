@@ -20,6 +20,12 @@ PLATFORM_ADMIN_READ_ROLES = {
     PlatformAdminRole.super_admin.value,
 }
 
+PLATFORM_ADMIN_ACCOUNTING_READ_ROLES = {
+    PlatformAdminRole.support.value,
+    PlatformAdminRole.billing_admin.value,
+    PlatformAdminRole.super_admin.value,
+}
+
 PLATFORM_ADMIN_PAYMENT_READ_ROLES = {
     PlatformAdminRole.support.value,
     PlatformAdminRole.billing_admin.value,
@@ -97,6 +103,15 @@ async def require_platform_admin_read(
         db,
         current_user,
         PLATFORM_ADMIN_READ_ROLES,
+    )
+
+
+async def require_platform_admin_accounting_read(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PlatformAdminMembership:
+    return await require_platform_admin_roles(
+        db, current_user, PLATFORM_ADMIN_ACCOUNTING_READ_ROLES
     )
 
 

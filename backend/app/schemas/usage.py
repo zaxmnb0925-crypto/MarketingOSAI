@@ -60,3 +60,18 @@ class WorkspaceUsageResponse(BaseModel):
     credits: UsageCreditStats
     plan: UsagePlanStats
     profit: UsageProfitStats
+
+
+class CustomerUsagePlanStats(BaseModel):
+    code: str
+    name: str
+    cycle_start: str
+    cycle_end: str
+    status: str
+    auto_renew: bool
+
+
+class CustomerWorkspaceUsageResponse(BaseModel):
+    workspace_id: str
+    generations: UsageGenerationStats
+    plan: CustomerUsagePlanStats

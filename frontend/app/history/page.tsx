@@ -60,7 +60,6 @@ export default function HistoryPage() {
     completedCount,
     failedCount,
     pendingCount,
-    totalTokens,
   } = useContentHistory();
 
   
@@ -329,7 +328,7 @@ export default function HistoryPage() {
 
             <p>
               查看每個品牌的 AI
-              文案、Token 與成本紀錄。
+              文案與任務狀態。
             </p>
           </div>
         </header>
@@ -349,7 +348,6 @@ export default function HistoryPage() {
           completedCount={completedCount}
           failedCount={failedCount}
           pendingCount={pendingCount}
-          totalTokens={totalTokens}
         />
 
         {error ? (

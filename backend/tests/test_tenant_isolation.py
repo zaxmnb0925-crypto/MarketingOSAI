@@ -112,8 +112,6 @@ def test_workspace_routes_are_guarded():
         content.preview_content,
         content.list_content_generations,
         content.generate_content,
-        credits.get_credit_account,
-        credits.get_credit_ledger,
         social_accounts.list_social_accounts,
         social_accounts.get_social_account,
         social_accounts.update_social_account,
