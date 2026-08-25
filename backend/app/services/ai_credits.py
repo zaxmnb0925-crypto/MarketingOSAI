@@ -104,7 +104,7 @@ async def _get_existing_generation_accounting_event(
     db: AsyncSession,
     workspace_id: UUID,
     generation_id: UUID | None,
-    operation: str,
+    operations: tuple[str, ...],
     *,
     expected_credits: int,
 ):
@@ -118,8 +118,7 @@ async def _get_existing_generation_accounting_event(
             == workspace_id,
             AICreditLedger.generation_id
             == generation_id,
-            AICreditLedger.operation
-            == operation,
+            AICreditLedger.operation.in_(operations),
         )
         .order_by(
             AICreditLedger.created_at.asc(),
@@ -133,6 +132,11 @@ async def _get_existing_generation_accounting_event(
 
     if not rows:
         return None
+
+    if len(rows) != 1:
+        raise AICreditAccountingConflict(
+            "Multiple accounting events exist for one generation"
+        )
 
     if any(
         int(row.credits)
@@ -180,13 +184,12 @@ async def reserve_credits(
             db,
             workspace_id,
             generation_id,
-            operation,
+            (operation,),
             expected_credits=-amount,
         )
     )
 
     if existing_event is not None:
-        await db.commit()
         return account, existing_event
 
     if account.balance < amount:
@@ -211,8 +214,7 @@ async def reserve_credits(
     )
 
     db.add(ledger)
-
-    await db.commit()
+    await db.flush()
 
     return account, ledger
 
@@ -233,12 +235,18 @@ async def record_actual_cost(
     )
 
     ledger = result.scalar_one()
+    requested_cost = Decimal(str(actual_cost_usd))
 
-    ledger.actual_cost_usd = Decimal(
-        str(actual_cost_usd)
-    )
+    if ledger.actual_cost_usd is None:
+        ledger.actual_cost_usd = requested_cost
+        await db.flush()
+        return
 
-    await db.commit()
+    if Decimal(ledger.actual_cost_usd) != requested_cost:
+        raise AICreditAccountingConflict(
+            "Actual provider cost is already recorded "
+            "with a different value"
+        )
 
 
 async def refund_credits(
@@ -269,18 +277,34 @@ async def refund_credits(
         )
     )
 
+    replay_operations = (
+        (
+            "content_policy_refund",
+            "provider_failure_refund",
+        )
+        if operation in {
+            "content_policy_refund",
+            "provider_failure_refund",
+        }
+        else (operation,)
+    )
+
     existing_event = (
         await _get_existing_generation_accounting_event(
             db,
             workspace_id,
             generation_id,
-            operation,
+            replay_operations,
             expected_credits=amount,
         )
     )
 
     if existing_event is not None:
-        await db.commit()
+        if existing_event.operation != operation:
+            raise AICreditAccountingConflict(
+                "A terminal refund already exists "
+                "for a different reason"
+            )
         return account
 
     account.balance += amount
@@ -299,16 +323,14 @@ async def refund_credits(
 
     subscription.updated_at = utcnow()
 
-    db.add(
-        AICreditLedger(
-            workspace_id=workspace_id,
-            generation_id=generation_id,
-            operation=operation,
-            credits=amount,
-            note=note,
-        )
+    ledger = AICreditLedger(
+        workspace_id=workspace_id,
+        generation_id=generation_id,
+        operation=operation,
+        credits=amount,
+        note=note,
     )
-
-    await db.commit()
+    db.add(ledger)
+    await db.flush()
 
     return account

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 APPROVED_TEMP_ROOT = Path("/tmp/marketingos-integration-resources")
-ALEMBIC_TARGET_HEAD = "7c91e2f4b6a8"
+ALEMBIC_TARGET_HEAD = "f0289623eb1e"
 RUN_ID_PATTERN = re.compile(r"^r22-[0-9a-f]{16}$")
 CONTAINER_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
