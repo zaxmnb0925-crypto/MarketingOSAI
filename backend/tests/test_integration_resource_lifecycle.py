@@ -303,7 +303,7 @@ def test_migration_requires_attestation_environment_and_exact_head(tmp_path, mon
     command = authorize_migration(sentinel_path=sentinel, observation_path=observed,
                                   run_id=RUN_ID, runtime_password="runtime-only",
                                   approved_root=root)
-    assert command[-1] == "7c91e2f4b6a8" and "runtime-only" not in command
+    assert command[-1] == "f0289623eb1e" and "runtime-only" not in command
 
 
 def test_migration_without_required_environment_is_rejected(tmp_path, monkeypatch):

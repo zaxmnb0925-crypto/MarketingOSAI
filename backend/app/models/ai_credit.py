@@ -5,9 +5,11 @@ from decimal import Decimal
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -59,6 +61,29 @@ class WorkspaceCreditAccount(Base):
 
 class AICreditLedger(Base):
     __tablename__ = "ai_credit_ledger"
+    __table_args__ = (
+        Index(
+            "uq_ai_credit_ledger_generation_debit",
+            "workspace_id",
+            "generation_id",
+            unique=True,
+            postgresql_where=text(
+                "generation_id IS NOT NULL AND "
+                "operation = 'content_generation'"
+            ),
+        ),
+        Index(
+            "uq_ai_credit_ledger_generation_terminal_refund",
+            "workspace_id",
+            "generation_id",
+            unique=True,
+            postgresql_where=text(
+                "generation_id IS NOT NULL AND operation IN "
+                "('content_policy_refund', "
+                "'provider_failure_refund')"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

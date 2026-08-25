@@ -117,6 +117,27 @@ async def get_brand_for_workspace(
     return brand
 
 
+async def _lock_pending_generation(
+    db: AsyncSession,
+    workspace_id: UUID,
+    generation_id: UUID,
+) -> ContentGeneration:
+    result = await db.execute(
+        select(ContentGeneration)
+        .where(
+            ContentGeneration.id == generation_id,
+            ContentGeneration.workspace_id == workspace_id,
+        )
+        .with_for_update()
+    )
+    generation = result.scalar_one()
+    if generation.status != ContentStatus.pending:
+        raise AICreditAccountingConflict(
+            "Content generation is already terminal"
+        )
+    return generation
+
+
 @router.post(
     "/preview",
     response_model=PromptPreviewResponse,
@@ -311,12 +332,10 @@ async def generate_content(
     )
 
     db.add(generation)
-
-    await db.commit()
-    await db.refresh(generation)
+    await db.flush()
 
     try:
-        account, debit = await reserve_credits(
+        _, debit = await reserve_credits(
             db,
             workspace_id,
             CONTENT_GENERATION_CREDITS,
@@ -325,176 +344,122 @@ async def generate_content(
             note="AI social content generation",
         )
 
-    except InsufficientAICredits:
-        generation.status = ContentStatus.failed
-        generation.error_message = (
-            "Insufficient AI credits"
-        )
-
+        generation_id = generation.id
+        debit_ledger_id = debit.id
+        forbidden_words = brand.forbidden_words
         await db.commit()
-
+    except InsufficientAICredits:
+        await db.rollback()
         raise HTTPException(
             status_code=402,
             detail="Generation is currently unavailable",
         )
     except AICreditAccountingConflict:
         await db.rollback()
-
-        generation_result = await db.execute(
-            select(ContentGeneration).where(
-                ContentGeneration.id
-                == generation.id
-            )
-        )
-
-        stored_generation = (
-            generation_result.scalar_one()
-        )
-
-        stored_generation.status = (
-            ContentStatus.failed
-        )
-
-        stored_generation.error_message = (
-            "AI credit accounting conflict"
-        )
-
-        await db.commit()
-
         raise HTTPException(
             status_code=409,
             detail="Generation request could not be completed",
         )
 
+    # The reservation transaction is committed above.  Provider I/O must not
+    # execute while any accounting transaction or row lock is open.
     try:
-        result = await generate_social_content(
-            prompt
-        )
-
-        generation.generated_content = (
-            result.content
-        )
-        generation.model = result.model
-        generation.input_tokens = (
-            result.input_tokens
-        )
-        generation.output_tokens = (
-            result.output_tokens
-        )
-        generation.estimated_cost_usd = (
-            result.estimated_cost_usd
-        )
-
-        output_forbidden_hits = (
-            detect_forbidden_words(
-                result.content,
-                brand.forbidden_words,
-            )
-        )
-
-        await record_actual_cost(
-            db,
-            debit.id,
-            result.estimated_cost_usd,
-        )
-
-        if output_forbidden_hits:
-            generation.status = (
-                ContentStatus.failed
-            )
-            generation.error_message = (
-                "Generated content contains "
-                "forbidden brand terms"
-            )
-
-            await db.commit()
-
-            await refund_credits(
-                db,
-                workspace_id,
-                CONTENT_GENERATION_CREDITS,
-                generation_id=generation.id,
-                operation="content_policy_refund",
-                note=(
-                    "Refund: generated output "
-                    "failed brand policy"
-                ),
-            )
-
-        else:
-            generation.status = (
-                ContentStatus.completed
-            )
-
-            await db.commit()
-
-        await db.refresh(generation)
-
-        return GenerateContentResponse(
-            generation=serialize_customer_generation(
-                generation
-            ),
-            forbidden_word_hits=(
-                output_forbidden_hits
-            ),
-        )
-
-    except HTTPException:
-        raise
-
-    except AICreditAccountingConflict:
-        await db.rollback()
-
-        raise HTTPException(
-            status_code=409,
-            detail="Generation request could not be completed",
-        )
-
+        result = await generate_social_content(prompt)
     except Exception:
-        await db.rollback()
-
-        generation_result = await db.execute(
-            select(ContentGeneration).where(
-                ContentGeneration.id
-                == generation.id
-            )
-        )
-
-        stored_generation = (
-            generation_result.scalar_one()
-        )
-
-        stored_generation.status = (
-            ContentStatus.failed
-        )
-        stored_generation.error_message = (
-            "AI provider generation failed"
-        )
-
-        await db.commit()
-
         try:
+            locked_generation = await _lock_pending_generation(
+                db,
+                workspace_id,
+                generation_id,
+            )
             await refund_credits(
                 db,
                 workspace_id,
                 CONTENT_GENERATION_CREDITS,
-                generation_id=generation.id,
+                generation_id=generation_id,
                 operation="provider_failure_refund",
-                note=(
-                    "Refund: AI provider "
-                    "generation failed"
-                ),
+                note="Refund: AI provider generation failed",
             )
-
+            locked_generation.status = ContentStatus.failed
+            locked_generation.error_message = (
+                "AI provider generation failed"
+            )
+            await db.commit()
         except AICreditAccountingConflict:
             await db.rollback()
-
             raise HTTPException(
                 status_code=409,
                 detail="AI credit accounting conflict",
             )
+        except Exception:
+            await db.rollback()
+            raise
 
         raise HTTPException(
             status_code=502,
             detail="AI generation failed",
         )
+
+    output_forbidden_hits = detect_forbidden_words(
+        result.content,
+        forbidden_words,
+    )
+
+    try:
+        locked_generation = await _lock_pending_generation(
+            db,
+            workspace_id,
+            generation_id,
+        )
+        locked_generation.generated_content = result.content
+        locked_generation.model = result.model
+        locked_generation.input_tokens = result.input_tokens
+        locked_generation.output_tokens = result.output_tokens
+        locked_generation.estimated_cost_usd = (
+            result.estimated_cost_usd
+        )
+
+        if output_forbidden_hits:
+            await refund_credits(
+                db,
+                workspace_id,
+                CONTENT_GENERATION_CREDITS,
+                generation_id=generation_id,
+                operation="content_policy_refund",
+                note=(
+                    "Refund: generated output failed brand policy"
+                ),
+            )
+
+        await record_actual_cost(
+            db,
+            debit_ledger_id,
+            result.estimated_cost_usd,
+        )
+
+        if output_forbidden_hits:
+            locked_generation.status = ContentStatus.failed
+            locked_generation.error_message = (
+                "Generated content contains forbidden brand terms"
+            )
+        else:
+            locked_generation.status = ContentStatus.completed
+
+        await db.commit()
+        await db.refresh(locked_generation)
+    except AICreditAccountingConflict:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Generation request could not be completed",
+        )
+    except Exception:
+        await db.rollback()
+        raise
+
+    return GenerateContentResponse(
+        generation=serialize_customer_generation(
+            locked_generation
+        ),
+        forbidden_word_hits=output_forbidden_hits,
+    )

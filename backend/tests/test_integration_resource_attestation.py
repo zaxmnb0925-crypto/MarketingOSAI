@@ -173,6 +173,7 @@ def test_runner_source_has_exact_allowlist_and_no_batch_execution():
     root = Path(__file__).resolve().parents[2]
     runner = (root / "scripts/run_backend_integration_cleanroom.sh").read_text()
     expected = {
+        "backend/tests/test_p4_ai_accounting_postgres_integration.py",
         "backend/tests/test_publication_reconciliation_postgres_integration.py",
         "backend/tests/test_publication_publish_http_integration.py",
         "backend/tests/test_publication_publish_normal_mode_integration.py",
