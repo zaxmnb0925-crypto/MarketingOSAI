@@ -113,3 +113,15 @@ def test_customer_subscription_read_does_not_load_credit_account():
     assert "lifetime_used" not in source
     assert "balance=" not in source
     assert "commit(" not in source
+
+
+def test_public_plan_catalog_is_anonymous_read_only_and_safe():
+    source = inspect.getsource(api.list_plans)
+    signature = inspect.signature(api.list_plans)
+
+    assert "current_user" not in signature.parameters
+    assert "get_current_user" not in source
+    assert "is_active" in source
+    assert "is_public" in source
+    assert "PublicPlanResponse" in source
+    assert "commit(" not in source

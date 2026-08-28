@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     template: "%s | MarketingOS AI",
   },
   description:
-    "AI Marketing Operating System",
+    "為中文市場商家打造的品牌、AI 內容與社群發布工作流。",
 };
 
 export default function RootLayout({
@@ -19,10 +19,11 @@ export default function RootLayout({
   return (
     <html lang="zh-Hant">
       <body>{children}
-        <footer className="border-t px-6 py-4 text-center text-sm text-neutral-500">
+        <footer className="site-footer">
+          <span>© MarketingOS AI</span>
+          <a href="/pricing">方案價格</a>
           <a
             href="/privacy"
-            className="underline underline-offset-4 hover:text-neutral-900"
           >
             Privacy Policy
           </a>

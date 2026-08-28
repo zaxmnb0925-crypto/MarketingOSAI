@@ -12,7 +12,7 @@ from app.models.user import User
 from app.schemas.subscription import (
     ChangePlanRequest,
     CustomerWorkspaceSubscriptionResponse,
-    PlanResponse,
+    PublicPlanResponse,
 )
 from app.services.subscriptions import ensure_default_plans, get_plan
 
@@ -22,10 +22,9 @@ router = APIRouter(tags=["Subscriptions"])
 
 @router.get(
     "/api/subscription-plans",
-    response_model=list[PlanResponse],
+    response_model=list[PublicPlanResponse],
 )
 async def list_plans(
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_default_plans(db)
@@ -35,9 +34,15 @@ async def list_plans(
             SubscriptionPlan.is_active.is_(True),
             SubscriptionPlan.is_public.is_(True),
         )
-        .order_by(SubscriptionPlan.list_price_minor)
+        .order_by(
+            SubscriptionPlan.sort_order,
+            SubscriptionPlan.list_price_minor,
+        )
     )
-    return [PlanResponse.model_validate(row) for row in result.scalars().all()]
+    return [
+        PublicPlanResponse.model_validate(row)
+        for row in result.scalars().all()
+    ]
 
 
 @router.get(

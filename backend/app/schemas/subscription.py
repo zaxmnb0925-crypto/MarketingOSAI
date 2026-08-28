@@ -18,6 +18,20 @@ class PlanResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PublicPlanResponse(BaseModel):
+    code: str
+    name: str
+    description: str | None
+    billing_period: str
+    currency: str
+    list_price_minor: int
+    promotional_price_minor: int | None
+    price_display_note: str | None
+    manual_quote_required: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ChangePlanRequest(BaseModel):
     plan_code: str
 

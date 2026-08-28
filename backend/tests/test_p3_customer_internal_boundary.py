@@ -9,7 +9,10 @@ from app.api import credits, platform_admin_access, subscriptions, usage
 from app.api.content import serialize_customer_generation
 from app.models.content_generation import ContentGeneration
 from app.schemas.content import CustomerContentGenerationResponse
-from app.schemas.subscription import CustomerWorkspaceSubscriptionResponse
+from app.schemas.subscription import (
+    CustomerWorkspaceSubscriptionResponse,
+    PublicPlanResponse,
+)
 from app.schemas.usage import WorkspaceUsageResponse
 from app.services import ai_credits, usage_analytics
 
@@ -47,6 +50,20 @@ def test_customer_subscription_schema_hides_usage_and_accounting():
     assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(schema.get("properties", {})))
     assert {"credits", "tokens", "cost", "profit"}.issubset(WorkspaceUsageResponse.model_fields)
 
+
+def test_public_plan_schema_exposes_price_without_usage_accounting():
+    fields = set(PublicPlanResponse.model_fields)
+    assert {
+        "code",
+        "name",
+        "description",
+        "currency",
+        "list_price_minor",
+        "promotional_price_minor",
+    }.issubset(fields)
+    assert FORBIDDEN_USAGE.isdisjoint(fields)
+    assert {"is_active", "is_public"}.isdisjoint(fields)
+
 def test_customer_openapi_response_models_are_safe():
     from app.main import app
     document = app.openapi()
@@ -57,6 +74,8 @@ def test_customer_openapi_response_models_are_safe():
     assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(customer_subscription))
     assert "/api/workspaces/{workspace_id}/usage" not in document["paths"]
     assert "/api/platform-admin/workspaces/{workspace_id}/usage" in document["paths"]
+    public_plan = components["PublicPlanResponse"]["properties"]
+    assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(public_plan))
     assert subscriptions.get_workspace_subscription is not None
 
 def test_internal_accounting_routes_use_platform_authority():
