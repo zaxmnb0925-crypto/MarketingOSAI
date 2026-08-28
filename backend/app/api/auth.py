@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -64,6 +65,8 @@ def slugify(value: str) -> str:
 async def issue_tokens(
     db: AsyncSession,
     user: User,
+    *,
+    commit: bool = True,
 ) -> TokenResponse:
 
     access_token, expires_in = create_access_token(
@@ -82,7 +85,10 @@ async def issue_tokens(
         )
     )
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
 
     return TokenResponse(
         access_token=access_token,
@@ -100,6 +106,17 @@ async def register(
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+
+    await enforce_rate_limit(
+        scope="register",
+        identifiers=(
+            normalized_login_identifier_hash(
+                payload.email
+            ),
+        ),
+        limit=5,
+        window_seconds=3600,
+    )
 
     email = normalize_email(
         str(payload.email)
@@ -153,15 +170,24 @@ async def register(
             )
         )
 
+        tokens = await issue_tokens(
+            db,
+            user,
+            commit=False,
+        )
+
         await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        ) from exc
     except Exception:
         await db.rollback()
         raise
 
-    return await issue_tokens(
-        db,
-        user,
-    )
+    return tokens
 
 
 @router.post(

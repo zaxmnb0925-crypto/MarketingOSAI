@@ -150,6 +150,10 @@ export default function LoginPage() {
         <div className="auth-security">
           安全登入 · HttpOnly Session
         </div>
+
+        <p className="auth-switch">
+          還沒有帳號？<a href="/register">免費建立帳號</a>
+        </p>
       </section>
     </main>
   );

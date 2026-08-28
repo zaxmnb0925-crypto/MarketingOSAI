@@ -218,10 +218,13 @@ def test_handler_wiring_contract():
     expectations = {
         "backend/app/api/auth.py": (
             'scope="login"',
+            'scope="register"',
             "normalized_login_identifier_hash(",
             "payload.email",
             "limit=10",
             "window_seconds=600",
+            "limit=5",
+            "window_seconds=3600",
         ),
 
         "backend/app/api/content.py": (
@@ -256,12 +259,15 @@ def test_handler_wiring_contract():
             encoding="utf-8"
         )
 
-        assert (
-            text.count(
-                "await enforce_rate_limit("
-            )
-            == 1
+        expected_call_count = (
+            2
+            if relative == "backend/app/api/auth.py"
+            else 1
         )
+
+        assert text.count(
+            "await enforce_rate_limit("
+        ) == expected_call_count
 
         for fragment in fragments:
             assert fragment in text
@@ -275,14 +281,10 @@ def test_login_rate_limit_does_not_use_untrusted_ip_headers():
         encoding="utf-8"
     ).lower()
 
+    login_scope = text.index('scope="login"')
     limiter_area = text[
-        text.index(
-            "await enforce_rate_limit("
-        ):
-        text.index(
-            "await enforce_rate_limit("
-        )
-        + 700
+        max(0, login_scope - 250):
+        login_scope + 700
     ]
 
     assert (

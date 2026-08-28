@@ -43,6 +43,23 @@ def test_registration_schema_enforces_password_floor():
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    ("full_name", "workspace_name"),
+)
+def test_registration_schema_rejects_blank_names(field):
+    values = {
+        "email": "owner@example.com",
+        "password": "secure-password",
+        "full_name": "Owner",
+        "workspace_name": "Alpha",
+    }
+    values[field] = "   "
+
+    with pytest.raises(ValidationError):
+        RegisterRequest(**values)
+
+
 def test_registration_contract_creates_workspace_membership():
     source = inspect.getsource(
         auth.register
@@ -73,3 +90,16 @@ def test_registration_provisions_free_subscription_in_same_transaction():
         "await db.commit()"
     )
     assert "await db.rollback()" in source
+    assert "commit=False" in source
+    assert source.count("await db.commit()") == 1
+
+
+def test_registration_is_rate_limited_and_handles_unique_races():
+    source = inspect.getsource(auth.register)
+
+    assert 'scope="register"' in source
+    assert "normalized_login_identifier_hash" in source
+    assert "limit=5" in source
+    assert "window_seconds=3600" in source
+    assert "except IntegrityError" in source
+    assert "status.HTTP_409_CONFLICT" in source

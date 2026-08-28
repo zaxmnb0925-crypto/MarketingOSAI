@@ -454,6 +454,37 @@ a {
   text-align: center;
 }
 
+.auth-switch,
+.register-notice {
+  margin: 18px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.auth-switch a {
+  margin-left: 5px;
+  color: #93c5fd;
+  font-weight: 700;
+}
+
+.register-panel {
+  width: min(680px, 100%);
+}
+
+.register-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 620px) {
+  .register-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .dashboard-loading {
   min-height: 100vh;
   display: grid;

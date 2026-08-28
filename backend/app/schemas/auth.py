@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
@@ -20,6 +20,14 @@ class RegisterRequest(BaseModel):
         min_length=1,
         max_length=150,
     )
+
+    @field_validator("full_name", "workspace_name")
+    @classmethod
+    def strip_required_names(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
 
 
 class LoginRequest(BaseModel):
