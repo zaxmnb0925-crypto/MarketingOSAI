@@ -11,10 +11,9 @@ from app.models.subscription import SubscriptionPlan, WorkspaceSubscription
 from app.models.user import User
 from app.schemas.subscription import (
     ChangePlanRequest,
+    CustomerWorkspaceSubscriptionResponse,
     PlanResponse,
-    WorkspaceSubscriptionResponse,
 )
-from app.services.ai_credits import get_or_create_credit_account
 from app.services.subscriptions import ensure_default_plans, get_plan
 
 
@@ -43,7 +42,7 @@ async def list_plans(
 
 @router.get(
     "/api/workspaces/{workspace_id}/subscription",
-    response_model=WorkspaceSubscriptionResponse,
+    response_model=CustomerWorkspaceSubscriptionResponse,
 )
 async def get_workspace_subscription(
     workspace_id: UUID,
@@ -51,7 +50,6 @@ async def get_workspace_subscription(
     db: AsyncSession = Depends(get_db),
 ):
     await require_workspace_membership(db, current_user, workspace_id)
-    account = await get_or_create_credit_account(db, workspace_id, lock=True)
     result = await db.execute(
         select(WorkspaceSubscription).where(
             WorkspaceSubscription.workspace_id == workspace_id
@@ -64,17 +62,10 @@ async def get_workspace_subscription(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Subscription catalog unavailable",
         )
-    await db.commit()
-    return WorkspaceSubscriptionResponse(
+    return CustomerWorkspaceSubscriptionResponse(
         workspace_id=workspace_id,
         plan_code=subscription.plan_code,
         plan_name=plan.name,
-        price_twd=plan.price_twd,
-        monthly_credits=plan.monthly_credits,
-        balance=account.balance,
-        lifetime_used=account.lifetime_used,
-        credits_granted=subscription.credits_granted,
-        credits_used=subscription.credits_used,
         cycle_start=subscription.cycle_start,
         cycle_end=subscription.cycle_end,
         starts_at=subscription.starts_at,

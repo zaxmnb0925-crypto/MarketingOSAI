@@ -62,3 +62,10 @@ def test_global_layout_links_to_privacy_policy():
 
     assert 'href="/privacy"' in text
     assert "Privacy Policy" in text
+
+
+def test_privacy_policy_keeps_internal_usage_telemetry_private():
+    text = PRIVACY.read_text(encoding="utf-8")
+
+    assert "Customer-facing pages do not expose" in text
+    assert "internal accounting telemetry" in text

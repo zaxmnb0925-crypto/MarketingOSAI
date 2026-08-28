@@ -8,10 +8,13 @@ type MeResponse = {
   user: { id: string; email: string; full_name: string | null; is_active: boolean };
   workspaces: Workspace[];
 };
-type UsageResponse = {
+type SubscriptionResponse = {
   workspace_id: string;
-  generations: { total: number; completed: number; failed: number; pending: number; draft: number };
-  plan: { code: string; name: string; cycle_start: string; cycle_end: string; status: string; auto_renew: boolean };
+  plan_code: string;
+  plan_name: string;
+  cycle_start: string;
+  cycle_end: string;
+  status: string;
 };
 
 function dateFormat(value: string) {
@@ -21,7 +24,7 @@ function dateFormat(value: string) {
 export default function DashboardPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
-  const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const [subscription, setSubscription] = useState<SubscriptionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -35,9 +38,12 @@ export default function DashboardPage() {
         const workspace = meData.workspaces[0];
         if (!workspace) throw new Error();
         setMe(meData);
-        const usageResponse = await fetch(`/api/workspaces/${workspace.id}/usage`, { cache: "no-store" });
-        if (!usageResponse.ok) throw new Error();
-        setUsage(await usageResponse.json());
+        const subscriptionResponse = await fetch(
+          `/api/workspaces/${workspace.id}/subscription`,
+          { cache: "no-store" },
+        );
+        if (!subscriptionResponse.ok) throw new Error();
+        setSubscription(await subscriptionResponse.json());
       } catch {
         setError("目前無法載入 Dashboard 資料。");
       } finally {
@@ -73,21 +79,15 @@ export default function DashboardPage() {
       <section className="dashboard-main">
         <header className="dashboard-header">
           <div><div className="eyebrow">OVERVIEW</div><h1>工作空間總覽</h1><p>{workspace.name}{" · "}{workspace.role}</p></div>
-          {usage ? <div className="plan-chip">{usage.plan.name} Plan</div> : null}
+          {subscription ? <div className="plan-chip">{subscription.plan_name} Plan</div> : null}
         </header>
         {error ? <div className="dashboard-error">{error}</div> : null}
-        {usage ? <>
-          <section className="metric-grid">
-            <article className="metric-card featured"><div className="metric-label">內容生成</div><strong>{usage.generations.completed}</strong><small>總任務 {usage.generations.total}</small></article>
-            <article className="metric-card"><div className="metric-label">等待中</div><strong>{usage.generations.pending}</strong><small>草稿 {usage.generations.draft}</small></article>
-            <article className="metric-card"><div className="metric-label">失敗</div><strong>{usage.generations.failed}</strong><small>生成活動統計</small></article>
-            <article className="metric-card"><div className="metric-label">目前方案</div><strong>{usage.plan.name}</strong><small>{usage.plan.status}</small></article>
-          </section>
+        {subscription ? <>
           <section className="dashboard-panel workspace-panel">
-            <div><div className="eyebrow">SUBSCRIPTION</div><h2>{usage.plan.name} 方案</h2><p>目前週期： {dateFormat(usage.plan.cycle_start)} → {dateFormat(usage.plan.cycle_end)}</p></div>
-            <div className="subscription-status"><span className="status-dot" />{usage.plan.status}</div>
+            <div><div className="eyebrow">SUBSCRIPTION</div><h2>{subscription.plan_name} 方案</h2><p>目前週期： {dateFormat(subscription.cycle_start)} → {dateFormat(subscription.cycle_end)}</p></div>
+            <div className="subscription-status"><span className="status-dot" />{subscription.status}</div>
           </section>
-        </> : <section className="dashboard-panel"><p>無法取得 Usage 資料。</p></section>}
+        </> : <section className="dashboard-panel"><p>無法取得方案資料。</p></section>}
       </section>
     </main>
   );

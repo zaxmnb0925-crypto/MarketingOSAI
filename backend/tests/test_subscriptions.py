@@ -99,3 +99,17 @@ async def test_customer_plan_change_is_closed(monkeypatch):
         )
     assert membership_checked is True
     assert exc.value.status_code == 403
+
+
+def test_customer_subscription_read_does_not_load_credit_account():
+    source = inspect.getsource(
+        api.get_workspace_subscription
+    )
+
+    assert "get_or_create_credit_account" not in source
+    assert "monthly_credits" not in source
+    assert "credits_granted" not in source
+    assert "credits_used" not in source
+    assert "lifetime_used" not in source
+    assert "balance=" not in source
+    assert "commit(" not in source

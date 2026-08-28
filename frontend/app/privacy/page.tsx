@@ -48,7 +48,7 @@ const sections = [
   {
     title: "7. Usage, credit, and billing-related data",
     body: [
-      "The service may record feature usage, AI usage, token or processing usage, credit consumption, and related operational records required to display usage and enforce service limits.",
+      "The service may record feature usage, AI usage, token or processing usage, credit consumption, and related operational records to enforce service limits, operate billing controls, prevent abuse, and maintain internal accounting. Customer-facing pages do not expose token, cost, credit-balance, or internal accounting telemetry.",
     ],
   },
   {
