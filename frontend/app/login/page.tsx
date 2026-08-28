@@ -58,7 +58,15 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace("/dashboard");
+      const nextPath = new URLSearchParams(
+        window.location.search,
+      ).get("next");
+
+      router.replace(
+        nextPath === "/admin"
+          ? "/admin"
+          : "/dashboard",
+      );
       router.refresh();
     } catch {
       setError(
