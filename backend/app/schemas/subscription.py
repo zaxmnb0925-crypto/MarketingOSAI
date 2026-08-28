@@ -45,3 +45,17 @@ class WorkspaceSubscriptionResponse(BaseModel):
     billing_currency: str
     status: str
     auto_renew: bool
+
+
+class CustomerWorkspaceSubscriptionResponse(BaseModel):
+    workspace_id: UUID
+    plan_code: str
+    plan_name: str
+    cycle_start: datetime
+    cycle_end: datetime
+    starts_at: datetime
+    expires_at: datetime | None
+    renewal_price_minor: int
+    billing_currency: str
+    status: str
+    auto_renew: bool

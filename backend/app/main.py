@@ -19,7 +19,6 @@ from app.api.social_accounts import router as social_account_router
 from app.api.oauth_connections import router as oauth_connection_router
 from app.api.usage import (
     platform_admin_router as platform_admin_usage_router,
-    router as usage_router,
 )
 from app.api.publications import router as publication_router
 from app.core.config import settings
@@ -65,7 +64,6 @@ app.include_router(platform_admin_console_router)
 app.include_router(platform_admin_billing_router)
 app.include_router(social_account_router)
 app.include_router(oauth_connection_router)
-app.include_router(usage_router)
 app.include_router(platform_admin_usage_router)
 app.include_router(publication_router)
 

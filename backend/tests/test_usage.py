@@ -27,10 +27,14 @@ def test_workspace_usage_service_is_scoped():
     assert "ContentGeneration" in source
 
 
-def test_usage_endpoint_requires_workspace_access():
-    source = inspect.getsource(
-        api.workspace_usage
-    )
+def test_customer_usage_endpoint_is_not_registered():
+    from app.main import app
 
-    assert "workspace_id" in source
-    assert "require_workspace_" in source
+    paths = app.openapi()["paths"]
+    assert "/api/workspaces/{workspace_id}/usage" not in paths
+    assert "/api/platform-admin/workspaces/{workspace_id}/usage" in paths
+
+
+def test_usage_module_only_exposes_platform_admin_router():
+    assert not hasattr(api, "router")
+    assert hasattr(api, "platform_admin_router")

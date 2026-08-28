@@ -14,5 +14,4 @@ __all__ = [
     "subscription_router",
 ]
 
-from app.api.usage import router as usage_router
 from app.api.publications import router as publication_router

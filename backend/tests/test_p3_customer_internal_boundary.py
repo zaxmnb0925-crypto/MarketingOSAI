@@ -5,11 +5,12 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api import credits, platform_admin_access, usage
+from app.api import credits, platform_admin_access, subscriptions, usage
 from app.api.content import serialize_customer_generation
 from app.models.content_generation import ContentGeneration
 from app.schemas.content import CustomerContentGenerationResponse
-from app.schemas.usage import CustomerWorkspaceUsageResponse, WorkspaceUsageResponse
+from app.schemas.subscription import CustomerWorkspaceSubscriptionResponse
+from app.schemas.usage import WorkspaceUsageResponse
 from app.services import ai_credits, usage_analytics
 
 FORBIDDEN_GENERATION = {
@@ -18,7 +19,8 @@ FORBIDDEN_GENERATION = {
 }
 FORBIDDEN_USAGE = {
     "credits", "tokens", "cost", "profit", "monthly_credits",
-    "price_twd", "usage_percent",
+    "price_twd", "usage_percent", "balance", "lifetime_used",
+    "credits_granted", "credits_used",
 }
 
 def recursive_keys(value):
@@ -40,8 +42,8 @@ def test_customer_generation_schema_and_serializer_hide_internal_fields():
     payload = serialize_customer_generation(item).model_dump(mode="json")
     assert FORBIDDEN_GENERATION.isdisjoint(recursive_keys(payload))
 
-def test_customer_usage_schema_hides_internal_accounting():
-    schema = CustomerWorkspaceUsageResponse.model_json_schema()
+def test_customer_subscription_schema_hides_usage_and_accounting():
+    schema = CustomerWorkspaceSubscriptionResponse.model_json_schema()
     assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(schema.get("properties", {})))
     assert {"credits", "tokens", "cost", "profit"}.issubset(WorkspaceUsageResponse.model_fields)
 
@@ -50,9 +52,12 @@ def test_customer_openapi_response_models_are_safe():
     document = app.openapi()
     components = document["components"]["schemas"]
     generation = components["CustomerContentGenerationResponse"]["properties"]
-    customer_usage = components["CustomerWorkspaceUsageResponse"]["properties"]
     assert FORBIDDEN_GENERATION.isdisjoint(generation)
-    assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(customer_usage))
+    customer_subscription = components["CustomerWorkspaceSubscriptionResponse"]["properties"]
+    assert FORBIDDEN_USAGE.isdisjoint(recursive_keys(customer_subscription))
+    assert "/api/workspaces/{workspace_id}/usage" not in document["paths"]
+    assert "/api/platform-admin/workspaces/{workspace_id}/usage" in document["paths"]
+    assert subscriptions.get_workspace_subscription is not None
 
 def test_internal_accounting_routes_use_platform_authority():
     assert credits.router.prefix.startswith("/api/platform-admin/")
