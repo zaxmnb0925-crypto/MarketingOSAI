@@ -20,6 +20,7 @@ from _test_environment_guard import validate_test_environment
 
 ALLOWLIST = {
     "backend/tests/test_p4_ai_accounting_postgres_integration.py": False,
+    "backend/tests/test_p5_platform_admin_postgres_integration.py": False,
     "backend/tests/test_publication_reconciliation_postgres_integration.py": False,
     "backend/tests/test_publication_publish_http_integration.py": True,
     "backend/tests/test_publication_publish_normal_mode_integration.py": True,

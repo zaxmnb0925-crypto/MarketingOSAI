@@ -115,6 +115,36 @@ class PaymentRecordResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaymentRecordListResponse(BaseModel):
+    items: list[PaymentRecordResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class PlatformAdminIdentityResponse(BaseModel):
+    user_id: UUID
+    email: str
+    full_name: str | None
+    role: str
+
+
+class PlatformAdminWorkspaceResponse(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlatformAdminWorkspaceListResponse(BaseModel):
+    items: list[PlatformAdminWorkspaceResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class PlatformSubscriptionResponse(BaseModel):
     workspace_id: UUID
     plan_code: str

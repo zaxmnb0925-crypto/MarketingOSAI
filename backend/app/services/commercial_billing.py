@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -504,6 +504,38 @@ async def get_payment(
     if payment is None:
         raise CommercialNotFound("Payment not found")
     return payment
+
+
+async def list_payments(
+    db: AsyncSession,
+    workspace_id: UUID,
+    *,
+    status: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[PaymentRecord], int]:
+    filters = [
+        PaymentRecord.workspace_id == workspace_id,
+    ]
+    if status is not None:
+        filters.append(PaymentRecord.status == status)
+
+    total_result = await db.execute(
+        select(func.count(PaymentRecord.id)).where(*filters)
+    )
+    total = total_result.scalar_one()
+
+    result = await db.execute(
+        select(PaymentRecord)
+        .where(*filters)
+        .order_by(
+            PaymentRecord.created_at.desc(),
+            PaymentRecord.id.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all()), total
 
 
 async def get_subscription(

@@ -2032,6 +2032,10 @@ def test_entrypoint_policy_reconciliation_unexpected_exit0_fails_closed():
         ),
         (
             "backend/tests/"
+            "test_p5_platform_admin_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
             "test_publication_publish_http_integration.py"
         ),
         (
@@ -2081,6 +2085,10 @@ def test_entrypoint_policy_collectable_files_accept_exit0_only(
         (
             "backend/tests/"
             "test_p4_ai_accounting_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_platform_admin_postgres_integration.py"
         ),
         (
             "backend/tests/"

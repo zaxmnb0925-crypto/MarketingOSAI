@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -19,6 +19,7 @@ from app.schemas.commercial import (
     ManualPaymentCreateRequest,
     PaymentConfirmationRequest,
     PaymentConfirmationResponse,
+    PaymentRecordListResponse,
     PaymentRecordResponse,
     PlatformSubscriptionResponse,
     SubscriptionActionRequest,
@@ -33,6 +34,7 @@ from app.services.commercial_billing import (
     create_manual_payment,
     get_payment,
     get_subscription,
+    list_payments,
     suspend_subscription,
     transition_to_free,
 )
@@ -109,6 +111,42 @@ async def record_manual_payment(
         await db.rollback()
         raise
     return PaymentRecordResponse.model_validate(payment)
+
+
+@router.get(
+    "/payments",
+    response_model=PaymentRecordListResponse,
+)
+async def read_payments(
+    workspace_id: UUID,
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        pattern="^(pending|confirmed|rejected|refunded)$",
+    ),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    admin: PlatformAdminMembership = Depends(
+        require_platform_admin_payment_read
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    payments, total = await list_payments(
+        db,
+        workspace_id,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return PaymentRecordListResponse(
+        items=[
+            PaymentRecordResponse.model_validate(item)
+            for item in payments
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
