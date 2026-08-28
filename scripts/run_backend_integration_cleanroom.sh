@@ -12,6 +12,7 @@ fi
 
 case "$1" in
     backend/tests/test_p4_ai_accounting_postgres_integration.py) NEED_REDIS=false ;;
+    backend/tests/test_p5_platform_admin_postgres_integration.py) NEED_REDIS=false ;;
     backend/tests/test_publication_reconciliation_postgres_integration.py) NEED_REDIS=false ;;
     backend/tests/test_publication_publish_http_integration.py) NEED_REDIS=true ;;
     backend/tests/test_publication_publish_normal_mode_integration.py) NEED_REDIS=true ;;

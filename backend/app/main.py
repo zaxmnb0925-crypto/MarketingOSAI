@@ -12,6 +12,9 @@ from app.api.subscriptions import (
 from app.api.platform_admin_billing import (
     router as platform_admin_billing_router,
 )
+from app.api.platform_admin_console import (
+    router as platform_admin_console_router,
+)
 from app.api.social_accounts import router as social_account_router
 from app.api.oauth_connections import router as oauth_connection_router
 from app.api.usage import (
@@ -58,6 +61,7 @@ app.include_router(brand_router)
 app.include_router(content_router)
 app.include_router(credit_router)
 app.include_router(subscription_router)
+app.include_router(platform_admin_console_router)
 app.include_router(platform_admin_billing_router)
 app.include_router(social_account_router)
 app.include_router(oauth_connection_router)
