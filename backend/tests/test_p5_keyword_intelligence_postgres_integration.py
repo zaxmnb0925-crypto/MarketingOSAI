@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from _integration_run_identity import integration_token, integration_uuid
 from app.schemas.keyword_intelligence import (
     CollectiveKeywordQueryParameters,
+    IntelligenceContextQueryParameters,
     KeywordTrendQueryParameters,
 )
 from app.services.keyword_intelligence import list_keyword_trend_signals
 from app.services.keyword_intelligence import (
     ProviderKeywordSignal,
+    assemble_intelligence_context,
     calculate_trend_score,
     list_collective_keyword_trends,
     refresh_keyword_trend_signals,
@@ -429,6 +431,82 @@ async def test_p5_c3_privacy_preserving_collective_contract() -> None:
             )
         assert opted_out.collective_intelligence_enabled is False
         assert opted_out.items == []
+    finally:
+        await cleanup()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p5_c4_real_postgresql_bounded_context_contract() -> None:
+    await setup_collective_rows()
+    try:
+        requester = COLLECTIVE_WORKSPACE_IDS[0]
+        async with Session() as db:
+            response = await assemble_intelligence_context(
+                db,
+                requester,
+                IntelligenceContextQueryParameters(
+                    platform="google_search",
+                    region="TW",
+                    language="zh-TW",
+                    window_hours=24,
+                ),
+                now=NOW,
+            )
+
+        scopes = {item.signal_scope for item in response.items}
+        assert scopes == {"workspace", "collective"}
+        assert response.item_count == len(response.items)
+        assert response.item_count <= 20
+        assert response.context_bytes <= 8192
+        local_keywords = {
+            item.keyword
+            for item in response.items
+            if item.signal_scope == "workspace"
+        }
+        collective_keywords = {
+            item.keyword
+            for item in response.items
+            if item.signal_scope == "collective"
+        }
+        assert "低門檻私有詞" in local_keywords
+        assert collective_keywords == {"共同趨勢"}
+
+        payload = response.model_dump_json()
+        assert "opted-out" not in payload
+        assert "source-a" not in payload
+        assert "test-only evidence" not in payload
+        assert all(
+            str(value) not in payload
+            for value in COLLECTIVE_WORKSPACE_IDS[1:]
+        )
+
+        async with Session.begin() as db:
+            await db.execute(
+                text(
+                    """
+                    UPDATE workspaces
+                    SET collective_intelligence_enabled = false
+                    WHERE id = :workspace_id
+                    """
+                ),
+                {"workspace_id": requester},
+            )
+
+        async with Session() as db:
+            opted_out = await assemble_intelligence_context(
+                db,
+                requester,
+                IntelligenceContextQueryParameters(),
+                now=NOW,
+            )
+
+        assert opted_out.collective_intelligence_enabled is False
+        assert opted_out.items
+        assert all(
+            item.signal_scope == "workspace"
+            for item in opted_out.items
+        )
     finally:
         await cleanup()
         await engine.dispose()
