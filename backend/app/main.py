@@ -21,6 +21,9 @@ from app.api.usage import (
     platform_admin_router as platform_admin_usage_router,
 )
 from app.api.publications import router as publication_router
+from app.api.keyword_intelligence import (
+    router as keyword_intelligence_router,
+)
 from app.core.config import settings
 from app.core.request_context import (
     RequestContextMiddleware,
@@ -66,6 +69,7 @@ app.include_router(social_account_router)
 app.include_router(oauth_connection_router)
 app.include_router(platform_admin_usage_router)
 app.include_router(publication_router)
+app.include_router(keyword_intelligence_router)
 
 
 @app.get("/")

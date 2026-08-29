@@ -11,6 +11,7 @@ from app.api import (
     credits,
     social_accounts,
     subscriptions,
+    keyword_intelligence,
 )
 from app.api.workspace_access import (
     require_workspace_membership,
@@ -117,6 +118,7 @@ def test_workspace_routes_are_guarded():
         social_accounts.delete_social_account,
         subscriptions.get_workspace_subscription,
         subscriptions.change_workspace_plan,
+        keyword_intelligence.read_keyword_trend_signals,
     ]
 
     gates = (

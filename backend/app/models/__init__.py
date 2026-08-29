@@ -68,3 +68,6 @@ __all__.extend([
     "PublicationReconciliation",
     "PublicationReconciliationDecision",
 ])
+
+from app.models.keyword_intelligence import KeywordTrendSignal
+__all__.append("KeywordTrendSignal")

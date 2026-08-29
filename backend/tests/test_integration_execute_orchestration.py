@@ -974,7 +974,7 @@ def test_migration_builds_exact_argv_cwd_and_scrubbed_env(tmp_path):
     argv, env, cwd = build_migration_execution(
         sentinel_path=sentinel, run_id=RUN_ID, image=PG_IMAGE,
         runtime_password="runtime-only", executor=fake, approved_root=tmp_path / "approved")
-    assert argv[-2:] == ("upgrade", "f0289623eb1e") and cwd.name == "backend"
+    assert argv[-2:] == ("upgrade", "9f31a7c2d4e6") and cwd.name == "backend"
     assert env["DATABASE_URL"].startswith("postgresql+asyncpg://")
 
     expected_environment = {
@@ -2036,6 +2036,10 @@ def test_entrypoint_policy_reconciliation_unexpected_exit0_fails_closed():
         ),
         (
             "backend/tests/"
+            "test_p5_keyword_intelligence_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
             "test_publication_publish_http_integration.py"
         ),
         (
@@ -2089,6 +2093,10 @@ def test_entrypoint_policy_collectable_files_accept_exit0_only(
         (
             "backend/tests/"
             "test_p5_platform_admin_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_keyword_intelligence_postgres_integration.py"
         ),
         (
             "backend/tests/"
