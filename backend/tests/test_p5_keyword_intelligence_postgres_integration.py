@@ -510,3 +510,40 @@ async def test_p5_c4_real_postgresql_bounded_context_contract() -> None:
     finally:
         await cleanup()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p5_c5_real_postgresql_answer_context_contract() -> None:
+    from app.services.ai_answer_orchestration import prepare_ai_answer
+
+    await setup_collective_rows()
+    try:
+        requester = COLLECTIVE_WORKSPACE_IDS[0]
+        async with Session() as db:
+            prepared = await prepare_ai_answer(
+                db,
+                requester,
+                "synthetic brand prompt",
+                IntelligenceContextQueryParameters(
+                    platform="google_search",
+                    region="TW",
+                    language="zh-TW",
+                    window_hours=24,
+                ),
+                now=NOW,
+            )
+        assert prepared.local_item_count >= 1
+        assert prepared.collective_item_count == 1
+        assert prepared.context_item_count <= 20
+        assert len(prepared.prompt.encode("utf-8")) <= 24_576
+        assert "低門檻私有詞" in prepared.prompt
+        assert "共同趨勢" in prepared.prompt
+        assert "source-a" not in prepared.prompt
+        assert "test-only evidence" not in prepared.prompt
+        assert all(
+            str(value) not in prepared.prompt
+            for value in COLLECTIVE_WORKSPACE_IDS[1:]
+        )
+    finally:
+        await cleanup()
+        await engine.dispose()
