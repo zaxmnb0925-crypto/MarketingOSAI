@@ -148,6 +148,10 @@ def test_openapi_discloses_read_route_only():
     assert set(operations) == {"get"}
     refresh_path = f"{path}/refresh"
     assert set(app.openapi()["paths"][refresh_path]) == {"post"}
+    collective_path = f"{path}/collective"
+    assert set(app.openapi()["paths"][collective_path]) == {"get"}
+    preference_path = f"{path}/collective-preference"
+    assert set(app.openapi()["paths"][preference_path]) == {"patch"}
 
 
 def test_migration_is_fail_closed_and_has_no_seed_or_network_data():

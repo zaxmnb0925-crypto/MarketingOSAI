@@ -1,15 +1,20 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.keyword_intelligence import KeywordTrendSignal
+from app.models.workspace import Workspace
 from app.schemas.keyword_intelligence import (
+    CollectiveIntelligencePreferenceResponse,
+    CollectiveKeywordQueryParameters,
+    CollectiveKeywordSignalListResponse,
+    CollectiveKeywordSignalResponse,
     KeywordTrendQueryParameters,
     KeywordProviderRefreshResult,
     KeywordSignalRefreshResponse,
@@ -74,6 +79,21 @@ class KeywordRefreshPolicy:
 
 
 Sleep = Callable[[float], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class CollectiveIntelligencePolicy:
+    minimum_contributing_workspaces: int = 3
+    maximum_contributions_per_workspace: int = 1
+    window_hours: int = 24
+
+    def __post_init__(self) -> None:
+        if not 3 <= self.minimum_contributing_workspaces <= 100:
+            raise ValueError("collective workspace threshold is invalid")
+        if self.maximum_contributions_per_workspace != 1:
+            raise ValueError("workspace contribution clipping must be one")
+        if not 1 <= self.window_hours <= 168:
+            raise ValueError("collective time window is invalid")
 
 
 def calculate_trend_score(
@@ -357,6 +377,192 @@ def utcnow() -> datetime:
 
 def normalize_keyword(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def _collective_momentum(score: float) -> str:
+    if score >= 70:
+        return "rising"
+    if score >= 40:
+        return "stable"
+    return "falling"
+
+
+def _quantize_collective_score(score: float) -> float:
+    return min(100.0, max(0.0, round(score / 5.0) * 5.0))
+
+
+def _contributor_cohort(count: int) -> str:
+    if count >= 50:
+        return "50+"
+    if count >= 10:
+        return "10-49"
+    return "3-9"
+
+
+async def set_collective_intelligence_preference(
+    db: AsyncSession,
+    workspace_id: UUID,
+    *,
+    enabled: bool,
+) -> CollectiveIntelligencePreferenceResponse:
+    result = await db.execute(
+        select(Workspace).where(Workspace.id == workspace_id)
+    )
+    workspace = result.scalar_one_or_none()
+    if workspace is None:
+        raise ValueError("workspace does not exist")
+    workspace.collective_intelligence_enabled = enabled
+    await db.flush()
+    return CollectiveIntelligencePreferenceResponse(
+        workspace_id=workspace_id,
+        enabled=enabled,
+    )
+
+
+async def list_collective_keyword_trends(
+    db: AsyncSession,
+    workspace_id: UUID,
+    parameters: CollectiveKeywordQueryParameters,
+    *,
+    now: datetime | None = None,
+) -> CollectiveKeywordSignalListResponse:
+    """Return k-thresholded aggregates without contributor identities."""
+    generated_at = now or utcnow()
+    preference_result = await db.execute(
+        select(Workspace.collective_intelligence_enabled).where(
+            Workspace.id == workspace_id
+        )
+    )
+    enabled = preference_result.scalar_one_or_none()
+    if enabled is not True:
+        return CollectiveKeywordSignalListResponse(
+            workspace_id=workspace_id,
+            generated_at=generated_at,
+            collective_intelligence_enabled=False,
+            minimum_contributing_workspaces=3,
+            items=[],
+        )
+
+    policy = CollectiveIntelligencePolicy(
+        window_hours=parameters.window_hours,
+    )
+    cutoff = generated_at - timedelta(hours=policy.window_hours)
+    contribution_rank = func.row_number().over(
+        partition_by=(
+            KeywordTrendSignal.workspace_id,
+            KeywordTrendSignal.normalized_keyword,
+            KeywordTrendSignal.platform,
+            KeywordTrendSignal.region,
+            KeywordTrendSignal.language,
+        ),
+        order_by=(
+            KeywordTrendSignal.score.desc(),
+            KeywordTrendSignal.observed_at.desc(),
+        ),
+    ).label("contribution_rank")
+    contributions = select(
+        KeywordTrendSignal.workspace_id.label("contributor_id"),
+        KeywordTrendSignal.normalized_keyword.label("keyword"),
+        KeywordTrendSignal.platform.label("platform"),
+        KeywordTrendSignal.region.label("region"),
+        KeywordTrendSignal.language.label("language"),
+        KeywordTrendSignal.score.label("score"),
+        KeywordTrendSignal.source_name.label("source_name"),
+        KeywordTrendSignal.observed_at.label("observed_at"),
+        KeywordTrendSignal.expires_at.label("expires_at"),
+        contribution_rank,
+    ).join(
+        Workspace,
+        Workspace.id == KeywordTrendSignal.workspace_id,
+    ).where(
+        Workspace.collective_intelligence_enabled.is_(True),
+        KeywordTrendSignal.expires_at > generated_at,
+        KeywordTrendSignal.observed_at >= cutoff,
+    )
+    if parameters.platform:
+        contributions = contributions.where(
+            KeywordTrendSignal.platform == parameters.platform
+        )
+    if parameters.region:
+        contributions = contributions.where(
+            KeywordTrendSignal.region == parameters.region
+        )
+    if parameters.language:
+        contributions = contributions.where(
+            KeywordTrendSignal.language == parameters.language
+        )
+    if parameters.query:
+        contributions = contributions.where(
+            KeywordTrendSignal.normalized_keyword.contains(
+                normalize_keyword(parameters.query)
+            )
+        )
+    clipped = contributions.cte("clipped_collective_contributions")
+    workspace_count = func.count(
+        func.distinct(clipped.c.contributor_id)
+    )
+    average_score = func.avg(clipped.c.score)
+    aggregate = select(
+        clipped.c.keyword,
+        clipped.c.platform,
+        clipped.c.region,
+        clipped.c.language,
+        average_score.label("aggregate_score"),
+        workspace_count.label("workspace_count"),
+        func.count(func.distinct(clipped.c.source_name)).label(
+            "source_count"
+        ),
+        func.max(clipped.c.observed_at).label("observed_at"),
+        func.min(clipped.c.expires_at).label("expires_at"),
+    ).where(
+        clipped.c.contribution_rank
+        <= policy.maximum_contributions_per_workspace
+    ).group_by(
+        clipped.c.keyword,
+        clipped.c.platform,
+        clipped.c.region,
+        clipped.c.language,
+    ).having(
+        workspace_count >= policy.minimum_contributing_workspaces
+    ).order_by(
+        average_score.desc(),
+        func.max(clipped.c.observed_at).desc(),
+        clipped.c.keyword,
+    ).limit(parameters.limit)
+    result = await db.execute(aggregate)
+    items = []
+    for row in result.all():
+        score = _quantize_collective_score(
+            float(row.aggregate_score)
+        )
+        items.append(CollectiveKeywordSignalResponse(
+            keyword=row.keyword,
+            platform=row.platform,
+            region=row.region,
+            language=row.language,
+            score=score,
+            momentum=_collective_momentum(score),
+            observed_at=row.observed_at,
+            expires_at=row.expires_at,
+            contributor_cohort=_contributor_cohort(
+                row.workspace_count
+            ),
+            source_diversity=(
+                "multiple"
+                if row.source_count > 1
+                else "single"
+            ),
+            aggregation_window_hours=policy.window_hours,
+        ))
+    return CollectiveKeywordSignalListResponse(
+        workspace_id=workspace_id,
+        generated_at=generated_at,
+        collective_intelligence_enabled=True,
+        minimum_contributing_workspaces=(
+            policy.minimum_contributing_workspaces
+        ),
+        items=items,
+    )
 
 
 def serialize_signal(
