@@ -8,11 +8,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from _integration_run_identity import integration_token, integration_uuid
-from app.schemas.keyword_intelligence import KeywordTrendQueryParameters
+from app.schemas.keyword_intelligence import (
+    CollectiveKeywordQueryParameters,
+    KeywordTrendQueryParameters,
+)
 from app.services.keyword_intelligence import list_keyword_trend_signals
 from app.services.keyword_intelligence import (
     ProviderKeywordSignal,
     calculate_trend_score,
+    list_collective_keyword_trends,
     refresh_keyword_trend_signals,
 )
 
@@ -22,6 +26,10 @@ OTHER_WORKSPACE_ID = integration_uuid("p5-c1-keyword-other-workspace")
 FRESH_ID = integration_uuid("p5-c1-keyword-fresh")
 STALE_ID = integration_uuid("p5-c1-keyword-stale")
 OTHER_ID = integration_uuid("p5-c1-keyword-other")
+COLLECTIVE_WORKSPACE_IDS = tuple(
+    integration_uuid(f"p5-c3-collective-workspace-{index}")
+    for index in range(1, 5)
+)
 RUN_TOKEN = integration_token("p5-c1-keyword")
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 
@@ -30,17 +38,22 @@ Session = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def cleanup() -> None:
+    workspace_ids = [
+        WORKSPACE_ID,
+        OTHER_WORKSPACE_ID,
+        *COLLECTIVE_WORKSPACE_IDS,
+    ]
     async with Session.begin() as db:
         await db.execute(
             text(
                 "DELETE FROM keyword_trend_signals "
                 "WHERE workspace_id = ANY(:ids)"
             ),
-            {"ids": [WORKSPACE_ID, OTHER_WORKSPACE_ID]},
+            {"ids": workspace_ids},
         )
         await db.execute(
             text("DELETE FROM workspaces WHERE id = ANY(:ids)"),
-            {"ids": [WORKSPACE_ID, OTHER_WORKSPACE_ID]},
+            {"ids": workspace_ids},
         )
 
 
@@ -291,6 +304,131 @@ async def test_p5_c2_real_postgresql_ingestion_upsert_contract() -> None:
             momentum="rising",
         )
         assert all(row[1] != str(OTHER_WORKSPACE_ID) for row in updated_rows)
+    finally:
+        await cleanup()
+        await engine.dispose()
+
+
+async def setup_collective_rows() -> None:
+    await cleanup()
+    async with Session.begin() as db:
+        for index, workspace_id in enumerate(
+            COLLECTIVE_WORKSPACE_IDS,
+            start=1,
+        ):
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO workspaces (
+                        id,name,slug,created_at,
+                        collective_intelligence_enabled
+                    ) VALUES (
+                        :id,:name,:slug,:created_at,:enabled
+                    )
+                    """
+                ),
+                {
+                    "id": workspace_id,
+                    "name": f"{RUN_TOKEN}-collective-{index}",
+                    "slug": f"{RUN_TOKEN}-collective-{index}",
+                    "created_at": NOW,
+                    "enabled": index != 4,
+                },
+            )
+
+        rows = (
+            (COLLECTIVE_WORKSPACE_IDS[0], "共同趨勢", 80.0, "source-a"),
+            (COLLECTIVE_WORKSPACE_IDS[0], "共同趨勢", 95.0, "source-b"),
+            (COLLECTIVE_WORKSPACE_IDS[1], "共同趨勢", 70.0, "source-c"),
+            (COLLECTIVE_WORKSPACE_IDS[2], "共同趨勢", 60.0, "source-d"),
+            (COLLECTIVE_WORKSPACE_IDS[3], "共同趨勢", 100.0, "opted-out"),
+            (COLLECTIVE_WORKSPACE_IDS[0], "低門檻私有詞", 99.0, "private-a"),
+            (COLLECTIVE_WORKSPACE_IDS[1], "低門檻私有詞", 99.0, "private-b"),
+        )
+        for index, (workspace_id, keyword, score, source) in enumerate(rows):
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO keyword_trend_signals (
+                        id,workspace_id,keyword,normalized_keyword,
+                        platform,region,language,source_name,source_type,
+                        score,rank,momentum,evidence_note,observed_at,
+                        expires_at,created_at
+                    ) VALUES (
+                        :id,:workspace_id,:keyword,:normalized_keyword,
+                        'google_search','TW','zh-TW',:source,'synthetic',
+                        :score,1,'rising','test-only evidence',:observed_at,
+                        :expires_at,:created_at
+                    )
+                    """
+                ),
+                {
+                    "id": integration_uuid(f"p5-c3-signal-{index}"),
+                    "workspace_id": workspace_id,
+                    "keyword": keyword,
+                    "normalized_keyword": keyword,
+                    "source": source,
+                    "score": score,
+                    "observed_at": NOW - timedelta(minutes=index + 1),
+                    "expires_at": NOW + timedelta(hours=2),
+                    "created_at": NOW - timedelta(minutes=index + 1),
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_p5_c3_privacy_preserving_collective_contract() -> None:
+    await setup_collective_rows()
+    try:
+        requester = COLLECTIVE_WORKSPACE_IDS[0]
+        async with Session() as db:
+            response = await list_collective_keyword_trends(
+                db,
+                requester,
+                CollectiveKeywordQueryParameters(
+                    platform="google_search",
+                    region="TW",
+                    language="zh-TW",
+                    window_hours=24,
+                ),
+                now=NOW,
+            )
+
+        assert response.collective_intelligence_enabled is True
+        assert [item.keyword for item in response.items] == ["共同趨勢"]
+        item = response.items[0]
+        assert item.contributor_cohort == "3-9"
+        assert item.source_diversity == "multiple"
+        assert item.score == pytest.approx(75.0)
+        assert item.signal_scope == "collective"
+        payload = response.model_dump_json()
+        assert "低門檻私有詞" not in payload
+        assert "opted-out" not in payload
+        assert all(
+            str(value) not in payload
+            for value in COLLECTIVE_WORKSPACE_IDS[1:]
+        )
+
+        async with Session.begin() as db:
+            await db.execute(
+                text(
+                    """
+                    UPDATE workspaces
+                    SET collective_intelligence_enabled = false
+                    WHERE id = :workspace_id
+                    """
+                ),
+                {"workspace_id": requester},
+            )
+        async with Session() as db:
+            opted_out = await list_collective_keyword_trends(
+                db,
+                requester,
+                CollectiveKeywordQueryParameters(),
+                now=NOW,
+            )
+        assert opted_out.collective_intelligence_enabled is False
+        assert opted_out.items == []
     finally:
         await cleanup()
         await engine.dispose()

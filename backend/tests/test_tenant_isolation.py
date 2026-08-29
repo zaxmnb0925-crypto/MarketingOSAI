@@ -119,6 +119,8 @@ def test_workspace_routes_are_guarded():
         subscriptions.get_workspace_subscription,
         subscriptions.change_workspace_plan,
         keyword_intelligence.read_keyword_trend_signals,
+        keyword_intelligence.read_collective_keyword_trends,
+        keyword_intelligence.update_collective_intelligence_preference,
     ]
 
     gates = (
