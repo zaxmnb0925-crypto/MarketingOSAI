@@ -123,10 +123,21 @@ def test_api_is_authenticated_read_only_and_workspace_guarded():
     assert "get_current_user" in source
     assert "require_workspace_membership" in source
     assert "list_keyword_trend_signals" in source
-    assert not any(
-        route.methods.intersection({"POST", "PUT", "PATCH", "DELETE"})
-        for route in api.router.routes
+    read_route = next(
+        route for route in api.router.routes
+        if route.path == "/api/workspaces/{workspace_id}/keyword-signals"
     )
+    assert read_route.methods == {"GET"}
+
+    refresh_source = inspect.getsource(api.refresh_keyword_signals)
+    assert "get_current_user" in refresh_source
+    assert "require_workspace_membership" in refresh_source
+    assert "refresh_keyword_trend_signals" in refresh_source
+    refresh_route = next(
+        route for route in api.router.routes
+        if route.path.endswith("/keyword-signals/refresh")
+    )
+    assert refresh_route.methods == {"POST"}
 
 
 def test_openapi_discloses_read_route_only():
@@ -135,6 +146,8 @@ def test_openapi_discloses_read_route_only():
     path = "/api/workspaces/{workspace_id}/keyword-signals"
     operations = app.openapi()["paths"][path]
     assert set(operations) == {"get"}
+    refresh_path = f"{path}/refresh"
+    assert set(app.openapi()["paths"][refresh_path]) == {"post"}
 
 
 def test_migration_is_fail_closed_and_has_no_seed_or_network_data():

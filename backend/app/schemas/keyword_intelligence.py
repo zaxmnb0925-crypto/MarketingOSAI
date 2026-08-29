@@ -37,3 +37,31 @@ class KeywordTrendQueryParameters(BaseModel):
     query: str | None = Field(default=None, max_length=100)
     include_stale: bool = False
     limit: int = Field(default=25, ge=1, le=100)
+
+
+class KeywordSignalRefreshRequest(BaseModel):
+    platform: str = Field(min_length=1, max_length=40)
+    region: str = Field(min_length=1, max_length=16)
+    language: str = Field(min_length=1, max_length=20)
+
+
+class KeywordProviderRefreshResult(BaseModel):
+    provider: str
+    status: str
+    attempts: int = Field(ge=1, le=3)
+    accepted_signals: int = Field(ge=0)
+    failure_class: str | None = None
+
+
+class KeywordSignalRefreshResponse(BaseModel):
+    workspace_id: UUID
+    platform: str
+    region: str
+    language: str
+    refreshed_at: datetime
+    providers_attempted: int = Field(ge=1)
+    providers_succeeded: int = Field(ge=0)
+    providers_failed: int = Field(ge=0)
+    inserted: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    provider_results: list[KeywordProviderRefreshResult]
