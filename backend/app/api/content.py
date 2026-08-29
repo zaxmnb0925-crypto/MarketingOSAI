@@ -15,6 +15,7 @@ from app.api.workspace_access import (
     require_workspace_write,
 )
 from app.core.database import get_db
+from app.core.rate_limit import enforce_rate_limit
 from app.models.brand import Brand
 from app.models.content_generation import (
     ContentGeneration,
@@ -27,6 +28,13 @@ from app.schemas.content import (
     CustomerContentGenerationResponse,
     GenerateContentResponse,
     PromptPreviewResponse,
+)
+from app.schemas.keyword_intelligence import (
+    IntelligenceContextQueryParameters,
+)
+from app.services.ai_answer_orchestration import (
+    IntelligenceContextAssemblyError,
+    prepare_ai_answer,
 )
 from app.services.ai_content import (
     generate_social_content,
@@ -43,7 +51,6 @@ from app.services.content_prompt import (
     build_brand_prompt,
     detect_forbidden_words,
 )
-from app.core.rate_limit import enforce_rate_limit
 
 
 router = APIRouter(
@@ -323,12 +330,32 @@ async def generate_content(
             },
         )
 
-    prompt = build_brand_prompt(
+    base_prompt = build_brand_prompt(
         brand=brand,
         platform=payload.platform,
         topic=payload.topic,
         objective=payload.objective,
     )
+
+    try:
+        prepared_answer = await prepare_ai_answer(
+            db,
+            workspace_id,
+            base_prompt,
+            IntelligenceContextQueryParameters(
+                platform=payload.platform.value,
+                language=brand.language[:20],
+                query=payload.topic.strip()[:100],
+            ),
+        )
+    except IntelligenceContextAssemblyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="AI intelligence context is unavailable",
+        )
+
+    prompt = prepared_answer.prompt
 
     generation = ContentGeneration(
         workspace_id=workspace_id,
