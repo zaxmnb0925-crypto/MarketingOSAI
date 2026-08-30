@@ -850,3 +850,160 @@ async def test_p5_c7_real_postgresql_quality_policy_governance_contract() -> Non
     finally:
         await remove_rows()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p5_c8_real_postgresql_controlled_activation_contract() -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    workspace_id = integration_uuid("p5-c8-activation-workspace")
+    other_workspace_id = integration_uuid("p5-c8-activation-other-workspace")
+    user_id = integration_uuid("p5-c8-activation-user")
+    brand_id = integration_uuid("p5-c8-activation-brand")
+    recommendation_id = integration_uuid("p5-c8-activation-recommendation")
+    activation_id = integration_uuid("p5-c8-activation")
+
+    async def remove_rows() -> None:
+        async with Session.begin() as db:
+            await db.execute(
+                text("DELETE FROM workspaces WHERE id = ANY(:ids)"),
+                {"ids": [workspace_id, other_workspace_id]},
+            )
+            await db.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+
+    await remove_rows()
+    try:
+        async with Session.begin() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO users (id,email,is_active,created_at) "
+                    "VALUES (:id,:email,true,now())"
+                ),
+                {"id": user_id, "email": RUN_TOKEN + "-activation@example.invalid"},
+            )
+            for value, suffix in (
+                (workspace_id, "activation"),
+                (other_workspace_id, "activation-other"),
+            ):
+                await db.execute(
+                    text(
+                        "INSERT INTO workspaces (id,name,slug,created_at) "
+                        "VALUES (:id,:name,:slug,now())"
+                    ),
+                    {
+                        "id": value,
+                        "name": f"{RUN_TOKEN}-{suffix}",
+                        "slug": f"{RUN_TOKEN}-{suffix}",
+                    },
+                )
+            await db.execute(
+                text(
+                    "INSERT INTO brands (id,workspace_id,name,language,created_at) "
+                    "VALUES (:id,:workspace_id,:name,'en',now())"
+                ),
+                {"id": brand_id, "workspace_id": workspace_id, "name": RUN_TOKEN},
+            )
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_recommendations (
+                    id,workspace_id,brand_id,version,status,
+                    minimum_quality_score,minimum_cohort_size,
+                    maximum_workspace_contribution,observation_count,
+                    distinct_workspace_count,average_quality_score,
+                    average_rating,confidence_score,recommendation_reason,
+                    provenance,approved_by_user_id,approved_at,created_at,updated_at
+                ) VALUES (
+                    :id,:workspace_id,:brand_id,1,'approved',65,12,6,18,3,
+                    70.00,3.50,85,'aggregate_quality_within_target',
+                    'clipped_aggregate_quality_feedback',:user_id,now(),now(),now()
+                )
+            """), {
+                "id": recommendation_id,
+                "workspace_id": workspace_id,
+                "brand_id": brand_id,
+                "user_id": user_id,
+            })
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_activations (
+                    id,workspace_id,brand_id,recommendation_id,version,
+                    policy_version,mode,status,minimum_quality_score,
+                    minimum_cohort_size,maximum_workspace_contribution,
+                    effective_at,activated_by_user_id,idempotency_key,
+                    created_at,updated_at
+                ) VALUES (
+                    :id,:workspace_id,:brand_id,:recommendation_id,1,1,
+                    'shadow','active',65,12,6,now(),:user_id,
+                    'p5-c8-shadow-activation',now(),now()
+                )
+            """), {
+                "id": activation_id,
+                "workspace_id": workspace_id,
+                "brand_id": brand_id,
+                "recommendation_id": recommendation_id,
+                "user_id": user_id,
+            })
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_activation_audits (
+                    id,activation_id,workspace_id,actor_user_id,action,
+                    reason,created_at
+                ) VALUES (
+                    :id,:activation_id,:workspace_id,:user_id,'activated',
+                    'synthetic human shadow activation',now()
+                )
+            """), {
+                "id": integration_uuid("p5-c8-activation-audit"),
+                "activation_id": activation_id,
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+            })
+
+        async with Session() as db:
+            row = (await db.execute(text("""
+                SELECT a.mode::text,a.status::text,a.policy_version,
+                       a.minimum_quality_score,u.action::text,u.reason
+                FROM ai_quality_policy_activations a
+                JOIN ai_quality_policy_activation_audits u
+                  ON u.activation_id=a.id AND u.workspace_id=a.workspace_id
+                WHERE a.id=:id AND a.workspace_id=:workspace_id
+                  AND a.brand_id=:brand_id
+            """), {
+                "id": activation_id,
+                "workspace_id": workspace_id,
+                "brand_id": brand_id,
+            })).one()
+            assert tuple(row) == (
+                "shadow", "active", 1, 65, "activated",
+                "synthetic human shadow activation",
+            )
+            leaked = await db.scalar(text("""
+                SELECT count(*) FROM ai_quality_policy_activations
+                WHERE workspace_id=:other_workspace_id AND id=:id
+            """), {
+                "other_workspace_id": other_workspace_id,
+                "id": activation_id,
+            })
+            assert leaked == 0
+
+        with pytest.raises(IntegrityError):
+            async with Session.begin() as db:
+                await db.execute(text("""
+                    INSERT INTO ai_quality_policy_activations (
+                        id,workspace_id,brand_id,recommendation_id,version,
+                        policy_version,mode,status,minimum_quality_score,
+                        minimum_cohort_size,maximum_workspace_contribution,
+                        effective_at,activated_by_user_id,idempotency_key,
+                        created_at,updated_at
+                    ) VALUES (
+                        :id,:workspace_id,:brand_id,:recommendation_id,2,1,
+                        'enforced','active',65,12,6,now(),:user_id,
+                        'p5-c8-second-active',now(),now()
+                    )
+                """), {
+                    "id": integration_uuid("p5-c8-second-active"),
+                    "workspace_id": workspace_id,
+                    "brand_id": brand_id,
+                    "recommendation_id": recommendation_id,
+                    "user_id": user_id,
+                })
+    finally:
+        await remove_rows()
+        await engine.dispose()
