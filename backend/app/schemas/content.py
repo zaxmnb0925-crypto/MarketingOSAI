@@ -10,6 +10,10 @@ from app.models.content_generation import (
 )
 from app.models.ai_answer_feedback import AnswerFeedbackReason
 from app.models.ai_quality_policy import AIQualityPolicyStatus
+from app.models.ai_quality_policy_activation import (
+    AIQualityPolicyActivationMode,
+    AIQualityPolicyActivationStatus,
+)
 
 
 class ContentPreviewRequest(BaseModel):
@@ -110,3 +114,41 @@ class AIQualityPolicyRecommendationResponse(BaseModel):
     activation_performed: bool = False
     approved_at: datetime | None
     created_at: datetime
+
+
+class AIQualityPolicyActivationRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    mode: AIQualityPolicyActivationMode
+    expected_active_activation_id: UUID | None = None
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    effective_at: datetime
+    expires_at: datetime | None = None
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyActivationResponse(BaseModel):
+    id: UUID
+    recommendation_id: UUID
+    version: int
+    policy_version: int
+    mode: AIQualityPolicyActivationMode
+    status: AIQualityPolicyActivationStatus
+    minimum_quality_score: int = Field(ge=0, le=100)
+    minimum_cohort_size: int = Field(ge=3, le=1000)
+    maximum_workspace_contribution: int = Field(ge=1, le=100)
+    effective_at: datetime
+    expires_at: datetime | None
+    supersedes_activation_id: UUID | None
+    created_at: datetime
+
+
+class AIQualityPolicyRollbackRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    target_activation_id: UUID
+    expected_active_activation_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    effective_at: datetime
+    expires_at: datetime | None = None
+    reason: str = Field(min_length=1, max_length=200)

@@ -51,6 +51,21 @@ __all__.extend([
     "PlatformAdminRole",
 ])
 
+from app.models.ai_quality_policy_activation import (
+    AIQualityPolicyActivation,
+    AIQualityPolicyActivationAction,
+    AIQualityPolicyActivationAudit,
+    AIQualityPolicyActivationMode,
+    AIQualityPolicyActivationStatus,
+)
+__all__.extend([
+    "AIQualityPolicyActivation",
+    "AIQualityPolicyActivationAction",
+    "AIQualityPolicyActivationAudit",
+    "AIQualityPolicyActivationMode",
+    "AIQualityPolicyActivationStatus",
+])
+
 from app.models.social_account import (
     SocialAccount,
     SocialAccountStatus,

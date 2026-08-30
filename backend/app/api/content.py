@@ -7,7 +7,7 @@ from fastapi import (
     HTTPException,
     status,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -29,6 +29,12 @@ from app.models.ai_quality_policy import (
     AIQualityPolicyRecommendation,
     AIQualityPolicyStatus,
 )
+from app.models.ai_quality_policy_activation import (
+    AIQualityPolicyActivation,
+    AIQualityPolicyActivationAction,
+    AIQualityPolicyActivationAudit,
+    AIQualityPolicyActivationStatus,
+)
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
@@ -39,6 +45,9 @@ from app.schemas.content import (
     AnswerFeedbackResponse,
     AIQualityPolicyDecisionRequest,
     AIQualityPolicyRecommendationResponse,
+    AIQualityPolicyActivationRequest,
+    AIQualityPolicyActivationResponse,
+    AIQualityPolicyRollbackRequest,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -54,6 +63,13 @@ from app.services.ai_answer_quality import (
     AnswerQualityContext,
     AnswerQualityEvaluationError,
     evaluate_ai_answer,
+)
+from app.services.ai_quality_policy_activation import (
+    ActivationSnapshot,
+    QualityPolicyActivationError,
+    plan_policy_activation,
+    plan_policy_rollback,
+    validate_activation_window,
 )
 from app.services.ai_credits import (
     AICreditAccountingConflict,
@@ -716,3 +732,286 @@ async def decide_quality_policy_recommendation(
     await db.commit()
     await db.refresh(recommendation)
     return serialize_quality_policy_recommendation(recommendation)
+
+
+def serialize_quality_policy_activation(
+    item: AIQualityPolicyActivation,
+) -> AIQualityPolicyActivationResponse:
+    return AIQualityPolicyActivationResponse(
+        id=item.id,
+        recommendation_id=item.recommendation_id,
+        version=item.version,
+        policy_version=item.policy_version,
+        mode=item.mode,
+        status=item.status,
+        minimum_quality_score=item.minimum_quality_score,
+        minimum_cohort_size=item.minimum_cohort_size,
+        maximum_workspace_contribution=item.maximum_workspace_contribution,
+        effective_at=item.effective_at,
+        expires_at=item.expires_at,
+        supersedes_activation_id=item.supersedes_activation_id,
+        created_at=item.created_at,
+    )
+
+
+@router.get(
+    "/quality-policy/activations/active",
+    response_model=AIQualityPolicyActivationResponse | None,
+)
+async def get_active_quality_policy(
+    workspace_id: UUID,
+    brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    activation = await db.scalar(
+        select(AIQualityPolicyActivation).where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+            AIQualityPolicyActivation.status == AIQualityPolicyActivationStatus.active,
+            AIQualityPolicyActivation.effective_at <= datetime.now(timezone.utc),
+            or_(
+                AIQualityPolicyActivation.expires_at.is_(None),
+                AIQualityPolicyActivation.expires_at > datetime.now(timezone.utc),
+            ),
+        )
+    )
+    return serialize_quality_policy_activation(activation) if activation else None
+
+
+@router.post(
+    "/quality-policy/recommendations/{recommendation_id}/activate",
+    response_model=AIQualityPolicyActivationResponse,
+)
+async def activate_quality_policy_recommendation(
+    workspace_id: UUID,
+    brand_id: UUID,
+    recommendation_id: UUID,
+    payload: AIQualityPolicyActivationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+
+    idempotent = await db.scalar(
+        select(AIQualityPolicyActivation).where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+            AIQualityPolicyActivation.idempotency_key == payload.idempotency_key,
+        )
+    )
+    if idempotent is not None:
+        if (
+            idempotent.recommendation_id != recommendation_id
+            or idempotent.mode != payload.mode
+        ):
+            raise HTTPException(status_code=409, detail="Idempotency key conflict")
+        return serialize_quality_policy_activation(idempotent)
+
+    recommendation = await db.scalar(
+        select(AIQualityPolicyRecommendation)
+        .where(
+            AIQualityPolicyRecommendation.id == recommendation_id,
+            AIQualityPolicyRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyRecommendation.brand_id == brand_id,
+        )
+        .with_for_update()
+    )
+    if recommendation is None:
+        raise HTTPException(status_code=404, detail="Policy recommendation not found")
+
+    current = await db.scalar(
+        select(AIQualityPolicyActivation)
+        .where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+            AIQualityPolicyActivation.status == AIQualityPolicyActivationStatus.active,
+        )
+        .with_for_update()
+    )
+    snapshot = None
+    if current is not None:
+        snapshot = ActivationSnapshot(
+            id=current.id,
+            recommendation_id=current.recommendation_id,
+            policy_version=current.policy_version,
+            mode=current.mode,
+            status=current.status,
+            effective_at=current.effective_at,
+            expires_at=current.expires_at,
+        )
+    try:
+        validate_activation_window(payload.effective_at, payload.expires_at)
+        plan = plan_policy_activation(
+            recommendation_id=recommendation.id,
+            recommendation_version=recommendation.version,
+            recommendation_status=recommendation.status,
+            requested_mode=payload.mode,
+            current=snapshot,
+            expected_active_activation_id=payload.expected_active_activation_id,
+        )
+    except QualityPolicyActivationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    latest_version = await db.scalar(
+        select(AIQualityPolicyActivation.version)
+        .where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+        )
+        .order_by(AIQualityPolicyActivation.version.desc())
+        .limit(1)
+    )
+    if current is not None:
+        current.status = AIQualityPolicyActivationStatus.superseded
+    activation = AIQualityPolicyActivation(
+        workspace_id=workspace_id,
+        brand_id=brand_id,
+        recommendation_id=recommendation.id,
+        version=(latest_version or 0) + 1,
+        policy_version=recommendation.version,
+        mode=plan.mode,
+        status=AIQualityPolicyActivationStatus.active,
+        minimum_quality_score=recommendation.minimum_quality_score,
+        minimum_cohort_size=recommendation.minimum_cohort_size,
+        maximum_workspace_contribution=recommendation.maximum_workspace_contribution,
+        effective_at=payload.effective_at,
+        expires_at=payload.expires_at,
+        activated_by_user_id=current_user.id,
+        idempotency_key=payload.idempotency_key,
+        supersedes_activation_id=plan.supersedes_activation_id,
+    )
+    db.add(activation)
+    await db.flush()
+    db.add(
+        AIQualityPolicyActivationAudit(
+            activation_id=activation.id,
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action=AIQualityPolicyActivationAction(plan.action),
+            previous_activation_id=current.id if current else None,
+            reason=payload.reason,
+        )
+    )
+    await db.commit()
+    await db.refresh(activation)
+    return serialize_quality_policy_activation(activation)
+
+
+@router.post(
+    "/quality-policy/activations/{activation_id}/rollback",
+    response_model=AIQualityPolicyActivationResponse,
+)
+async def rollback_quality_policy_activation(
+    workspace_id: UUID,
+    brand_id: UUID,
+    activation_id: UUID,
+    payload: AIQualityPolicyRollbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    idempotent = await db.scalar(
+        select(AIQualityPolicyActivation).where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+            AIQualityPolicyActivation.idempotency_key == payload.idempotency_key,
+        )
+    )
+    if idempotent is not None:
+        if idempotent.rolled_back_to_activation_id != payload.target_activation_id:
+            raise HTTPException(status_code=409, detail="Idempotency key conflict")
+        return serialize_quality_policy_activation(idempotent)
+
+    current = await db.scalar(
+        select(AIQualityPolicyActivation)
+        .where(
+            AIQualityPolicyActivation.id == activation_id,
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+            AIQualityPolicyActivation.status == AIQualityPolicyActivationStatus.active,
+        )
+        .with_for_update()
+    )
+    target = await db.scalar(
+        select(AIQualityPolicyActivation)
+        .where(
+            AIQualityPolicyActivation.id == payload.target_activation_id,
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+        )
+        .with_for_update()
+    )
+    if current is None or target is None:
+        raise HTTPException(status_code=404, detail="Activation not found")
+    try:
+        validate_activation_window(payload.effective_at, payload.expires_at)
+        plan = plan_policy_rollback(
+            current=ActivationSnapshot(
+                id=current.id,
+                recommendation_id=current.recommendation_id,
+                policy_version=current.policy_version,
+                mode=current.mode,
+                status=current.status,
+                effective_at=current.effective_at,
+                expires_at=current.expires_at,
+            ),
+            target=ActivationSnapshot(
+                id=target.id,
+                recommendation_id=target.recommendation_id,
+                policy_version=target.policy_version,
+                mode=target.mode,
+                status=target.status,
+                effective_at=target.effective_at,
+                expires_at=target.expires_at,
+            ),
+            expected_active_activation_id=payload.expected_active_activation_id,
+        )
+    except QualityPolicyActivationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    latest_version = await db.scalar(
+        select(AIQualityPolicyActivation.version)
+        .where(
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+        )
+        .order_by(AIQualityPolicyActivation.version.desc())
+        .limit(1)
+    )
+    current.status = AIQualityPolicyActivationStatus.rolled_back
+    rollback = AIQualityPolicyActivation(
+        workspace_id=workspace_id,
+        brand_id=brand_id,
+        recommendation_id=target.recommendation_id,
+        version=(latest_version or 0) + 1,
+        policy_version=target.policy_version,
+        mode=plan.mode,
+        status=AIQualityPolicyActivationStatus.active,
+        minimum_quality_score=target.minimum_quality_score,
+        minimum_cohort_size=target.minimum_cohort_size,
+        maximum_workspace_contribution=target.maximum_workspace_contribution,
+        effective_at=payload.effective_at,
+        expires_at=payload.expires_at,
+        activated_by_user_id=current_user.id,
+        idempotency_key=payload.idempotency_key,
+        supersedes_activation_id=current.id,
+        rolled_back_to_activation_id=target.id,
+    )
+    db.add(rollback)
+    await db.flush()
+    db.add(AIQualityPolicyActivationAudit(
+        activation_id=rollback.id,
+        workspace_id=workspace_id,
+        actor_user_id=current_user.id,
+        action=AIQualityPolicyActivationAction.rolled_back,
+        previous_activation_id=current.id,
+        reason=payload.reason,
+    ))
+    await db.commit()
+    await db.refresh(rollback)
+    return serialize_quality_policy_activation(rollback)
