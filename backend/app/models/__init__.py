@@ -66,6 +66,21 @@ __all__.extend([
     "AIQualityPolicyActivationStatus",
 ])
 
+from app.models.ai_quality_policy_effect import (
+    AIQualityPolicyDegradationAction,
+    AIQualityPolicyDegradationRecommendation,
+    AIQualityPolicyDegradationStatus,
+    AIQualityPolicyEffectObservation,
+    AIQualityPolicyEffectState,
+)
+__all__.extend([
+    "AIQualityPolicyDegradationAction",
+    "AIQualityPolicyDegradationRecommendation",
+    "AIQualityPolicyDegradationStatus",
+    "AIQualityPolicyEffectObservation",
+    "AIQualityPolicyEffectState",
+])
+
 from app.models.social_account import (
     SocialAccount,
     SocialAccountStatus,

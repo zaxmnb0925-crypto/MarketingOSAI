@@ -1,6 +1,7 @@
 """Real PostgreSQL validation for P5-C1 keyword intelligence."""
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import os
 
 import pytest
@@ -663,6 +664,101 @@ async def test_p5_c6_real_postgresql_quality_feedback_contract() -> None:
                     "generation_id": generation_id,
                     "user_id": user_id,
                 })
+    finally:
+        await remove_rows()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p5_c9_real_postgresql_policy_effect_observation_contract() -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    workspace_id = integration_uuid("p5-c9-effect-workspace")
+    user_id = integration_uuid("p5-c9-effect-user")
+    brand_id = integration_uuid("p5-c9-effect-brand")
+    recommendation_id = integration_uuid("p5-c9-effect-policy")
+    activation_id = integration_uuid("p5-c9-effect-activation")
+    observation_id = integration_uuid("p5-c9-effect-observation")
+    degradation_id = integration_uuid("p5-c9-degradation-recommendation")
+
+    async def remove_rows() -> None:
+        async with Session.begin() as db:
+            await db.execute(text("DELETE FROM workspaces WHERE id=:id"), {"id": workspace_id})
+            await db.execute(text("DELETE FROM users WHERE id=:id"), {"id": user_id})
+
+    await remove_rows()
+    try:
+        async with Session.begin() as db:
+            await db.execute(text("INSERT INTO users (id,email,is_active,created_at) VALUES (:id,:email,true,now())"), {"id": user_id, "email": RUN_TOKEN + "-effect@example.invalid"})
+            await db.execute(text("INSERT INTO workspaces (id,name,slug,created_at) VALUES (:id,:name,:slug,now())"), {"id": workspace_id, "name": RUN_TOKEN + "-effect", "slug": RUN_TOKEN + "-effect"})
+            await db.execute(text("INSERT INTO brands (id,workspace_id,name,language,created_at) VALUES (:id,:workspace_id,:name,'en',now())"), {"id": brand_id, "workspace_id": workspace_id, "name": RUN_TOKEN})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_recommendations (
+                    id,workspace_id,brand_id,version,status,minimum_quality_score,
+                    minimum_cohort_size,maximum_workspace_contribution,
+                    observation_count,distinct_workspace_count,average_quality_score,
+                    average_rating,confidence_score,recommendation_reason,provenance,
+                    approved_by_user_id,approved_at,created_at,updated_at
+                ) VALUES (:id,:workspace_id,:brand_id,1,'approved',70,12,6,18,3,
+                    75,4,90,'aggregate_quality_within_target',
+                    'clipped_aggregate_quality_feedback',:user_id,now(),now(),now())
+            """), {"id": recommendation_id, "workspace_id": workspace_id, "brand_id": brand_id, "user_id": user_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_activations (
+                    id,workspace_id,brand_id,recommendation_id,version,policy_version,
+                    mode,status,minimum_quality_score,minimum_cohort_size,
+                    maximum_workspace_contribution,effective_at,activated_by_user_id,
+                    idempotency_key,created_at,updated_at
+                ) VALUES (:id,:workspace_id,:brand_id,:recommendation_id,1,1,
+                    'enforced','active',70,12,6,now(),:user_id,
+                    'p5-c9-effect-activation',now(),now())
+            """), {"id": activation_id, "workspace_id": workspace_id, "brand_id": brand_id, "recommendation_id": recommendation_id, "user_id": user_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_effect_observations (
+                    id,workspace_id,brand_id,activation_id,observation_count,
+                    minimum_cohort_size,maximum_workspace_contribution,
+                    baseline_quality_score,observed_quality_score,quality_delta,
+                    baseline_failure_rate,observed_failure_rate,confidence_score,
+                    consecutive_degraded_windows,state,provenance,
+                    window_started_at,window_ended_at,created_at
+                ) VALUES (:id,:workspace_id,:brand_id,:activation_id,18,12,6,
+                    80,68,-12,0.10,0.30,90,2,'degraded',
+                    'clipped_aggregate_policy_effects',now()-interval '1 hour',now(),now())
+            """), {"id": observation_id, "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": activation_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_degradation_recommendations (
+                    id,observation_id,workspace_id,brand_id,activation_id,action,
+                    status,confidence_score,reason,created_at
+                ) VALUES (:id,:observation_id,:workspace_id,:brand_id,:activation_id,
+                    'rollback','pending_review',90,'sustained_policy_effect_degradation',now())
+            """), {"id": degradation_id, "observation_id": observation_id, "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": activation_id})
+
+        async with Session() as db:
+            row = (await db.execute(text("""
+                SELECT o.state::text,o.observation_count,o.quality_delta,
+                       d.action::text,d.status::text,a.status::text
+                FROM ai_quality_policy_effect_observations o
+                JOIN ai_quality_policy_degradation_recommendations d
+                  ON d.observation_id=o.id AND d.workspace_id=o.workspace_id
+                JOIN ai_quality_policy_activations a ON a.id=o.activation_id
+                WHERE o.id=:id AND o.workspace_id=:workspace_id
+            """), {"id": observation_id, "workspace_id": workspace_id})).one()
+            assert tuple(row) == ("degraded", 18, Decimal("-12.00"), "rollback", "pending_review", "active")
+
+        with pytest.raises(IntegrityError):
+            async with Session.begin() as db:
+                await db.execute(text("""
+                    INSERT INTO ai_quality_policy_effect_observations (
+                        id,workspace_id,brand_id,activation_id,observation_count,
+                        minimum_cohort_size,maximum_workspace_contribution,
+                        baseline_quality_score,observed_quality_score,quality_delta,
+                        baseline_failure_rate,observed_failure_rate,confidence_score,
+                        consecutive_degraded_windows,state,provenance,
+                        window_started_at,window_ended_at,created_at
+                    ) VALUES (:id,:workspace_id,:brand_id,:activation_id,2,12,6,
+                        80,68,-12,0.10,0.30,90,1,'watch',
+                        'clipped_aggregate_policy_effects',now(),now()+interval '1 hour',now())
+                """), {"id": integration_uuid("p5-c9-invalid-effect"), "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": activation_id})
     finally:
         await remove_rows()
         await engine.dispose()
