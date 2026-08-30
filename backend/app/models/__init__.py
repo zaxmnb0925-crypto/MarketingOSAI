@@ -80,3 +80,14 @@ __all__.extend([
     "AnswerFeedbackReason",
 ])
 
+from app.models.ai_quality_policy import (
+    AIQualityPolicyDecisionAudit,
+    AIQualityPolicyRecommendation,
+    AIQualityPolicyStatus,
+)
+__all__.extend([
+    "AIQualityPolicyDecisionAudit",
+    "AIQualityPolicyRecommendation",
+    "AIQualityPolicyStatus",
+])
+
