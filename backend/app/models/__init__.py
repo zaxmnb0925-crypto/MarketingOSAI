@@ -74,3 +74,14 @@ __all__.append("KeywordTrendSignal")
 
 from app.models.ai_answer_feedback import AIAnswerFeedback, AnswerFeedbackReason
 __all__.extend(["AIAnswerFeedback", "AnswerFeedbackReason"])
+
+from app.models.ai_quality_policy import (
+    AIQualityPolicyDecisionAudit,
+    AIQualityPolicyRecommendation,
+    AIQualityPolicyStatus,
+)
+__all__.extend([
+    "AIQualityPolicyDecisionAudit",
+    "AIQualityPolicyRecommendation",
+    "AIQualityPolicyStatus",
+])

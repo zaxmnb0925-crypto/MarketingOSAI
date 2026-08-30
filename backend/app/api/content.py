@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import (
@@ -23,6 +24,11 @@ from app.models.content_generation import (
 )
 from app.models.user import User
 from app.models.ai_answer_feedback import AIAnswerFeedback
+from app.models.ai_quality_policy import (
+    AIQualityPolicyDecisionAudit,
+    AIQualityPolicyRecommendation,
+    AIQualityPolicyStatus,
+)
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
@@ -31,6 +37,8 @@ from app.schemas.content import (
     PromptPreviewResponse,
     AnswerFeedbackRequest,
     AnswerFeedbackResponse,
+    AIQualityPolicyDecisionRequest,
+    AIQualityPolicyRecommendationResponse,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -597,3 +605,114 @@ async def upsert_answer_feedback(
         comment=feedback.comment,
         updated_at=feedback.updated_at,
     )
+
+
+def serialize_quality_policy_recommendation(
+    item: AIQualityPolicyRecommendation,
+) -> AIQualityPolicyRecommendationResponse:
+    return AIQualityPolicyRecommendationResponse(
+        id=item.id,
+        version=item.version,
+        status=item.status,
+        minimum_quality_score=item.minimum_quality_score,
+        minimum_cohort_size=item.minimum_cohort_size,
+        maximum_workspace_contribution=item.maximum_workspace_contribution,
+        observation_count=item.observation_count,
+        distinct_workspace_count=item.distinct_workspace_count,
+        average_quality_score=item.average_quality_score,
+        average_rating=item.average_rating,
+        confidence_score=item.confidence_score,
+        recommendation_reason=item.recommendation_reason,
+        provenance=item.provenance,
+        approved_at=item.approved_at,
+    )
+
+
+@router.get(
+    "/quality-policy/recommendations",
+    response_model=list[AIQualityPolicyRecommendationResponse],
+)
+async def list_quality_policy_recommendations(
+    workspace_id: UUID,
+    brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    result = await db.execute(
+        select(AIQualityPolicyRecommendation)
+        .where(
+            AIQualityPolicyRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyRecommendation.brand_id == brand_id,
+        )
+        .order_by(AIQualityPolicyRecommendation.version.desc())
+    )
+    return [
+        serialize_quality_policy_recommendation(item)
+        for item in result.scalars().all()
+    ]
+
+
+@router.post(
+    "/quality-policy/recommendations/{recommendation_id}/decision",
+    response_model=AIQualityPolicyRecommendationResponse,
+)
+async def decide_quality_policy_recommendation(
+    workspace_id: UUID,
+    brand_id: UUID,
+    recommendation_id: UUID,
+    payload: AIQualityPolicyDecisionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    recommendation = await db.scalar(
+        select(AIQualityPolicyRecommendation)
+        .where(
+            AIQualityPolicyRecommendation.id == recommendation_id,
+            AIQualityPolicyRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyRecommendation.brand_id == brand_id,
+        )
+        .with_for_update()
+    )
+    if recommendation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Policy recommendation not found",
+        )
+
+    allowed = {
+        AIQualityPolicyStatus.candidate: {
+            AIQualityPolicyStatus.approved,
+            AIQualityPolicyStatus.rejected,
+        },
+        AIQualityPolicyStatus.approved: {
+            AIQualityPolicyStatus.rolled_back,
+        },
+    }
+    if payload.status not in allowed.get(recommendation.status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail="Policy decision is not allowed",
+        )
+
+    previous_status = recommendation.status
+    recommendation.status = payload.status
+    if payload.status == AIQualityPolicyStatus.approved:
+        recommendation.approved_by_user_id = current_user.id
+        recommendation.approved_at = datetime.now(timezone.utc)
+    db.add(
+        AIQualityPolicyDecisionAudit(
+            recommendation_id=recommendation.id,
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            previous_status=previous_status,
+            new_status=payload.status,
+            reason=payload.reason.strip(),
+        )
+    )
+    await db.commit()
+    await db.refresh(recommendation)
+    return serialize_quality_policy_recommendation(recommendation)
