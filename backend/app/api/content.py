@@ -22,12 +22,15 @@ from app.models.content_generation import (
     ContentStatus,
 )
 from app.models.user import User
+from app.models.ai_answer_feedback import AIAnswerFeedback
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
     CustomerContentGenerationResponse,
     GenerateContentResponse,
     PromptPreviewResponse,
+    AnswerFeedbackRequest,
+    AnswerFeedbackResponse,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -38,6 +41,11 @@ from app.services.ai_answer_orchestration import (
 )
 from app.services.ai_content import (
     generate_social_content,
+)
+from app.services.ai_answer_quality import (
+    AnswerQualityContext,
+    AnswerQualityEvaluationError,
+    evaluate_ai_answer,
 )
 from app.services.ai_credits import (
     AICreditAccountingConflict,
@@ -443,6 +451,35 @@ async def generate_content(
     )
 
     try:
+        quality = await evaluate_ai_answer(
+            result.content,
+            AnswerQualityContext(
+                context_item_count=prepared_answer.context_item_count,
+                local_item_count=prepared_answer.local_item_count,
+                collective_item_count=prepared_answer.collective_item_count,
+                context_bytes=prepared_answer.context_bytes,
+            ),
+        )
+    except AnswerQualityEvaluationError:
+        try:
+            locked_generation = await _lock_pending_generation(
+                db, workspace_id, generation_id,
+            )
+            await refund_credits(
+                db, workspace_id, CONTENT_GENERATION_CREDITS,
+                generation_id=generation_id,
+                operation="quality_evaluation_refund",
+                note="Refund: generated output quality evaluation failed",
+            )
+            locked_generation.status = ContentStatus.failed
+            locked_generation.error_message = "AI quality evaluation failed"
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        raise HTTPException(status_code=502, detail="AI quality evaluation failed")
+
+    try:
         locked_generation = await _lock_pending_generation(
             db,
             workspace_id,
@@ -455,8 +492,12 @@ async def generate_content(
         locked_generation.estimated_cost_usd = (
             result.estimated_cost_usd
         )
+        locked_generation.quality_score = quality.overall_score
+        locked_generation.quality_evaluator = quality.evaluator
+        locked_generation.quality_disclosure = quality.disclosure
 
-        if output_forbidden_hits:
+        quality_rejected = not quality.passed
+        if output_forbidden_hits or quality_rejected:
             await refund_credits(
                 db,
                 workspace_id,
@@ -464,7 +505,7 @@ async def generate_content(
                 generation_id=generation_id,
                 operation="content_policy_refund",
                 note=(
-                    "Refund: generated output failed brand policy"
+                    "Refund: generated output failed policy or quality gate"
                 ),
             )
 
@@ -474,10 +515,10 @@ async def generate_content(
             result.estimated_cost_usd,
         )
 
-        if output_forbidden_hits:
+        if output_forbidden_hits or quality_rejected:
             locked_generation.status = ContentStatus.failed
             locked_generation.error_message = (
-                "Generated content contains forbidden brand terms"
+                "Generated content failed policy or quality gate"
             )
         else:
             locked_generation.status = ContentStatus.completed
@@ -499,4 +540,60 @@ async def generate_content(
             locked_generation
         ),
         forbidden_word_hits=output_forbidden_hits,
+    )
+
+
+@router.put(
+    "/{generation_id}/feedback",
+    response_model=AnswerFeedbackResponse,
+)
+async def upsert_answer_feedback(
+    workspace_id: UUID,
+    brand_id: UUID,
+    generation_id: UUID,
+    payload: AnswerFeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    generation = await db.scalar(
+        select(ContentGeneration).where(
+            ContentGeneration.id == generation_id,
+            ContentGeneration.workspace_id == workspace_id,
+            ContentGeneration.brand_id == brand_id,
+            ContentGeneration.status == ContentStatus.completed,
+        )
+    )
+    if generation is None:
+        raise HTTPException(status_code=404, detail="Generation not found")
+    feedback = await db.scalar(
+        select(AIAnswerFeedback).where(
+            AIAnswerFeedback.workspace_id == workspace_id,
+            AIAnswerFeedback.generation_id == generation_id,
+            AIAnswerFeedback.user_id == current_user.id,
+        ).with_for_update()
+    )
+    comment = payload.comment.strip() if payload.comment else None
+    if feedback is None:
+        feedback = AIAnswerFeedback(
+            workspace_id=workspace_id,
+            generation_id=generation_id,
+            user_id=current_user.id,
+            rating=payload.rating,
+            reason=payload.reason,
+            comment=comment,
+        )
+        db.add(feedback)
+    else:
+        feedback.rating = payload.rating
+        feedback.reason = payload.reason
+        feedback.comment = comment
+    await db.commit()
+    await db.refresh(feedback)
+    return AnswerFeedbackResponse(
+        generation_id=feedback.generation_id,
+        rating=feedback.rating,
+        reason=feedback.reason,
+        comment=feedback.comment,
+        updated_at=feedback.updated_at,
     )

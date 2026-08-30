@@ -547,3 +547,122 @@ async def test_p5_c5_real_postgresql_answer_context_contract() -> None:
     finally:
         await cleanup()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p5_c6_real_postgresql_quality_feedback_contract() -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    workspace_id = integration_uuid("p5-c6-quality-workspace")
+    other_workspace_id = integration_uuid("p5-c6-quality-other-workspace")
+    user_id = integration_uuid("p5-c6-quality-user")
+    brand_id = integration_uuid("p5-c6-quality-brand")
+    generation_id = integration_uuid("p5-c6-quality-generation")
+    feedback_id = integration_uuid("p5-c6-quality-feedback")
+
+    async def remove_rows() -> None:
+        async with Session.begin() as db:
+            await db.execute(
+                text("DELETE FROM workspaces WHERE id = ANY(:ids)"),
+                {"ids": [workspace_id, other_workspace_id]},
+            )
+            await db.execute(
+                text("DELETE FROM users WHERE id = :id"),
+                {"id": user_id},
+            )
+
+    await remove_rows()
+    try:
+        async with Session.begin() as db:
+            await db.execute(text(
+                "INSERT INTO users (id,email,is_active,created_at) "
+                "VALUES (:id,:email,true,now())"
+            ), {"id": user_id, "email": RUN_TOKEN + "-quality@example.invalid"})
+            for value, suffix in (
+                (workspace_id, "quality"),
+                (other_workspace_id, "quality-other"),
+            ):
+                await db.execute(text(
+                    "INSERT INTO workspaces (id,name,slug,created_at) "
+                    "VALUES (:id,:name,:slug,now())"
+                ), {
+                    "id": value,
+                    "name": f"{RUN_TOKEN}-{suffix}",
+                    "slug": f"{RUN_TOKEN}-{suffix}",
+                })
+            await db.execute(text(
+                "INSERT INTO brands (id,workspace_id,name,language,created_at) "
+                "VALUES (:id,:workspace_id,:name,'en',now())"
+            ), {"id": brand_id, "workspace_id": workspace_id, "name": RUN_TOKEN})
+            await db.execute(text("""
+                INSERT INTO content_generations (
+                    id,workspace_id,brand_id,user_id,platform,topic,status,
+                    quality_score,quality_evaluator,quality_disclosure,
+                    created_at,updated_at
+                ) VALUES (
+                    :id,:workspace_id,:brand_id,:user_id,'facebook','quality',
+                    'completed',87,'deterministic-quality-v1',NULL,now(),now()
+                )
+            """), {
+                "id": generation_id,
+                "workspace_id": workspace_id,
+                "brand_id": brand_id,
+                "user_id": user_id,
+            })
+            await db.execute(text("""
+                INSERT INTO ai_answer_feedback (
+                    id,workspace_id,generation_id,user_id,rating,reason,
+                    comment,created_at,updated_at
+                ) VALUES (
+                    :id,:workspace_id,:generation_id,:user_id,5,'helpful',
+                    'synthetic bounded feedback',now(),now()
+                )
+            """), {
+                "id": feedback_id,
+                "workspace_id": workspace_id,
+                "generation_id": generation_id,
+                "user_id": user_id,
+            })
+
+        async with Session() as db:
+            row = (await db.execute(text("""
+                SELECT g.quality_score,g.quality_evaluator,
+                       f.rating,f.reason::text,f.comment
+                FROM content_generations g
+                JOIN ai_answer_feedback f ON f.generation_id = g.id
+                WHERE g.workspace_id = :workspace_id
+                  AND f.workspace_id = :workspace_id
+            """), {"workspace_id": workspace_id})).one()
+            assert tuple(row) == (
+                87, "deterministic-quality-v1", 5, "helpful",
+                "synthetic bounded feedback",
+            )
+            leaked = await db.scalar(text("""
+                SELECT count(*) FROM ai_answer_feedback
+                WHERE workspace_id = :other_workspace_id
+                  AND generation_id = :generation_id
+            """), {
+                "other_workspace_id": other_workspace_id,
+                "generation_id": generation_id,
+            })
+            assert leaked == 0
+
+        with pytest.raises(IntegrityError):
+            async with Session.begin() as db:
+                await db.execute(text("""
+                    INSERT INTO ai_answer_feedback (
+                        id,workspace_id,generation_id,user_id,rating,reason,
+                        created_at,updated_at
+                    ) VALUES (
+                        :id,:workspace_id,:generation_id,:user_id,6,'helpful',
+                        now(),now()
+                    )
+                """), {
+                    "id": integration_uuid("p5-c6-invalid-feedback"),
+                    "workspace_id": other_workspace_id,
+                    "generation_id": generation_id,
+                    "user_id": user_id,
+                })
+    finally:
+        await remove_rows()
+        await engine.dispose()

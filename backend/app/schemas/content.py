@@ -8,6 +8,7 @@ from app.models.content_generation import (
     ContentPlatform,
     ContentStatus,
 )
+from app.models.ai_answer_feedback import AnswerFeedbackReason
 
 
 class ContentPreviewRequest(BaseModel):
@@ -62,3 +63,22 @@ class PromptPreviewResponse(BaseModel):
 class GenerateContentResponse(BaseModel):
     generation: CustomerContentGenerationResponse
     forbidden_word_hits: list[str]
+
+
+class AnswerQualitySummary(BaseModel):
+    score: int = Field(ge=0, le=100)
+    disclosure: str | None = None
+
+
+class AnswerFeedbackRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    reason: AnswerFeedbackReason
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class AnswerFeedbackResponse(BaseModel):
+    generation_id: UUID
+    rating: int
+    reason: AnswerFeedbackReason
+    comment: str | None
+    updated_at: datetime
