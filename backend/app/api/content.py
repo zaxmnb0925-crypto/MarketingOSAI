@@ -35,6 +35,11 @@ from app.models.ai_quality_policy_activation import (
     AIQualityPolicyActivationAudit,
     AIQualityPolicyActivationStatus,
 )
+from app.models.ai_quality_policy_effect import (
+    AIQualityPolicyDegradationRecommendation,
+    AIQualityPolicyDegradationStatus,
+    AIQualityPolicyEffectObservation,
+)
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
@@ -48,6 +53,9 @@ from app.schemas.content import (
     AIQualityPolicyActivationRequest,
     AIQualityPolicyActivationResponse,
     AIQualityPolicyRollbackRequest,
+    AIQualityPolicyDegradationRecommendationResponse,
+    AIQualityPolicyDegradationReviewRequest,
+    AIQualityPolicyEffectObservationResponse,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -752,6 +760,113 @@ def serialize_quality_policy_activation(
         supersedes_activation_id=item.supersedes_activation_id,
         created_at=item.created_at,
     )
+
+
+def serialize_policy_effect_observation(
+    item: AIQualityPolicyEffectObservation,
+) -> AIQualityPolicyEffectObservationResponse:
+    return AIQualityPolicyEffectObservationResponse(
+        id=item.id, activation_id=item.activation_id,
+        observation_count=item.observation_count,
+        baseline_quality_score=item.baseline_quality_score,
+        observed_quality_score=item.observed_quality_score,
+        quality_delta=item.quality_delta,
+        baseline_failure_rate=item.baseline_failure_rate,
+        observed_failure_rate=item.observed_failure_rate,
+        confidence_score=item.confidence_score,
+        consecutive_degraded_windows=item.consecutive_degraded_windows,
+        state=item.state, provenance=item.provenance,
+        window_started_at=item.window_started_at,
+        window_ended_at=item.window_ended_at,
+    )
+
+
+def serialize_degradation_recommendation(
+    item: AIQualityPolicyDegradationRecommendation,
+) -> AIQualityPolicyDegradationRecommendationResponse:
+    return AIQualityPolicyDegradationRecommendationResponse(
+        id=item.id, observation_id=item.observation_id,
+        activation_id=item.activation_id, action=item.action,
+        status=item.status, confidence_score=item.confidence_score,
+        reason=item.reason, reviewed_at=item.reviewed_at,
+    )
+
+
+@router.get(
+    "/quality-policy/effects",
+    response_model=list[AIQualityPolicyEffectObservationResponse],
+)
+async def list_quality_policy_effects(
+    workspace_id: UUID, brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    result = await db.execute(
+        select(AIQualityPolicyEffectObservation).where(
+            AIQualityPolicyEffectObservation.workspace_id == workspace_id,
+            AIQualityPolicyEffectObservation.brand_id == brand_id,
+        ).order_by(AIQualityPolicyEffectObservation.window_ended_at.desc())
+    )
+    return [serialize_policy_effect_observation(item) for item in result.scalars().all()]
+
+
+@router.get(
+    "/quality-policy/degradation-recommendations",
+    response_model=list[AIQualityPolicyDegradationRecommendationResponse],
+)
+async def list_quality_policy_degradation_recommendations(
+    workspace_id: UUID, brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    result = await db.execute(
+        select(AIQualityPolicyDegradationRecommendation).where(
+            AIQualityPolicyDegradationRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyDegradationRecommendation.brand_id == brand_id,
+        ).order_by(AIQualityPolicyDegradationRecommendation.created_at.desc())
+    )
+    return [serialize_degradation_recommendation(item) for item in result.scalars().all()]
+
+
+@router.post(
+    "/quality-policy/degradation-recommendations/{degradation_id}/review",
+    response_model=AIQualityPolicyDegradationRecommendationResponse,
+)
+async def review_quality_policy_degradation_recommendation(
+    workspace_id: UUID, brand_id: UUID, degradation_id: UUID,
+    payload: AIQualityPolicyDegradationReviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    if payload.status not in {
+        AIQualityPolicyDegradationStatus.accepted,
+        AIQualityPolicyDegradationStatus.dismissed,
+    }:
+        raise HTTPException(status_code=422, detail="Terminal human review required")
+    item = await db.scalar(
+        select(AIQualityPolicyDegradationRecommendation).where(
+            AIQualityPolicyDegradationRecommendation.id == degradation_id,
+            AIQualityPolicyDegradationRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyDegradationRecommendation.brand_id == brand_id,
+        ).with_for_update()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Degradation recommendation not found")
+    if item.status != AIQualityPolicyDegradationStatus.pending_review:
+        raise HTTPException(status_code=409, detail="Recommendation already reviewed")
+    item.status = payload.status
+    item.reviewed_by_user_id = current_user.id
+    item.reviewed_at = datetime.now(timezone.utc)
+    item.review_reason = payload.reason
+    await db.commit()
+    await db.refresh(item)
+    return serialize_degradation_recommendation(item)
 
 
 @router.get(

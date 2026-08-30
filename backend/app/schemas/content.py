@@ -14,6 +14,11 @@ from app.models.ai_quality_policy_activation import (
     AIQualityPolicyActivationMode,
     AIQualityPolicyActivationStatus,
 )
+from app.models.ai_quality_policy_effect import (
+    AIQualityPolicyDegradationAction,
+    AIQualityPolicyDegradationStatus,
+    AIQualityPolicyEffectState,
+)
 
 
 class ContentPreviewRequest(BaseModel):
@@ -151,4 +156,41 @@ class AIQualityPolicyRollbackRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=100)
     effective_at: datetime
     expires_at: datetime | None = None
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyEffectObservationResponse(BaseModel):
+    id: UUID
+    activation_id: UUID
+    observation_count: int
+    baseline_quality_score: Decimal
+    observed_quality_score: Decimal
+    quality_delta: Decimal
+    baseline_failure_rate: Decimal
+    observed_failure_rate: Decimal
+    confidence_score: int = Field(ge=0, le=100)
+    consecutive_degraded_windows: int
+    state: AIQualityPolicyEffectState
+    provenance: str
+    window_started_at: datetime
+    window_ended_at: datetime
+
+
+class AIQualityPolicyDegradationRecommendationResponse(BaseModel):
+    id: UUID
+    observation_id: UUID
+    activation_id: UUID
+    action: AIQualityPolicyDegradationAction
+    status: AIQualityPolicyDegradationStatus
+    confidence_score: int = Field(ge=0, le=100)
+    reason: str
+    requires_human_review: bool = True
+    automatic_action_performed: bool = False
+    reviewed_at: datetime | None
+
+
+class AIQualityPolicyDegradationReviewRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    status: AIQualityPolicyDegradationStatus
     reason: str = Field(min_length=1, max_length=200)
