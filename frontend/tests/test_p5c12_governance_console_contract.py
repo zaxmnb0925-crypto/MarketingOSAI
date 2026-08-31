@@ -116,3 +116,40 @@ def test_governance_navigation_login_return_and_responsive_styles():
     assert ".governance-dialog-backdrop" in css
     assert ".governance-permission.write" in css
     assert "@media (max-width: 760px)" in css
+
+def test_workspace_switch_clears_stale_governance_state_and_cancels_requests():
+    page = read(PAGE)
+
+    for required in (
+        "const snapshotRequestId = useRef(0)",
+        "const resetGovernanceScope = useCallback",
+        "snapshotRequestId.current += 1",
+        "setBrands([])",
+        'setBrandId("")',
+        "setSnapshot(emptySnapshot)",
+        "setRefreshing(false)",
+        'setMessage("")',
+        'setError("")',
+        "setAction(null)",
+        "setForm({})",
+        "setSubmitting(false)",
+        "let cancelled = false",
+        "if (cancelled) return",
+        "requestId !== snapshotRequestId.current",
+        "changeWorkspace(event.target.value)",
+    ):
+        assert required in page
+
+    workspace_effect = page[
+        page.index("  useEffect(() => {", page.index("resetGovernanceScope"))
+        :page.index(
+            "  useEffect(() => {\n    void loadSnapshot();",
+            page.index("resetGovernanceScope"),
+        )
+    ]
+
+    assert "resetGovernanceScope();" in workspace_effect
+    assert "return () => {" in workspace_effect
+    assert "cancelled = true" in workspace_effect
+    assert "setBrands(data)" in workspace_effect
+    assert "setSnapshot(emptySnapshot)" in workspace_effect

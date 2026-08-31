@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import type {
@@ -72,6 +72,25 @@ export default function GovernancePage() {
   const [action, setAction] = useState<PendingAction | null>(null);
   const [form, setForm] = useState<ActionForm>({});
   const [submitting, setSubmitting] = useState(false);
+  const snapshotRequestId = useRef(0);
+
+  const resetGovernanceScope = useCallback(() => {
+    snapshotRequestId.current += 1;
+    setBrands([]);
+    setBrandId("");
+    setSnapshot(emptySnapshot);
+    setRefreshing(false);
+    setMessage("");
+    setError("");
+    setAction(null);
+    setForm({});
+    setSubmitting(false);
+  }, []);
+
+  const changeWorkspace = (nextWorkspaceId: string) => {
+    resetGovernanceScope();
+    setWorkspaceId(nextWorkspaceId);
+  };
 
   const workspace = me?.workspaces.find((item) => item.id === workspaceId) || null;
   const brand = brands.find((item) => item.id === brandId) || null;
@@ -94,12 +113,18 @@ export default function GovernancePage() {
   }, [apiBase, router]);
 
   const loadSnapshot = useCallback(async () => {
+    const requestId = snapshotRequestId.current + 1;
+    snapshotRequestId.current = requestId;
+
     if (!apiBase) {
       setSnapshot(emptySnapshot);
+      setRefreshing(false);
       return;
     }
+
     setRefreshing(true);
     setError("");
+
     try {
       const [recommendation, active, effects, degradations, remediations, cases] =
         await Promise.all([
@@ -110,11 +135,19 @@ export default function GovernancePage() {
           governanceFetch<GovernanceSnapshot["remediations"]>("remediations"),
           governanceFetch<GovernanceSnapshot["cases"]>("governance-cases"),
         ]);
+
+      if (requestId !== snapshotRequestId.current) return;
+
       setSnapshot({ recommendation, active, effects, degradations, remediations, cases });
     } catch (caught) {
+      if (requestId !== snapshotRequestId.current) return;
+
+      setSnapshot(emptySnapshot);
       setError(caught instanceof Error ? caught.message : "治理狀態載入失敗。");
     } finally {
-      setRefreshing(false);
+      if (requestId === snapshotRequestId.current) {
+        setRefreshing(false);
+      }
     }
   }, [apiBase, governanceFetch]);
 
@@ -140,26 +173,53 @@ export default function GovernancePage() {
   }, [router]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    let cancelled = false;
+
+    resetGovernanceScope();
+
+    if (!workspaceId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     async function loadBrands() {
-      setError("");
-      setBrandId("");
       try {
         const response = await fetch(`/api/workspaces/${workspaceId}/brands`, { cache: "no-store" });
+
         if (response.status === 401) {
           router.replace("/login?next=/governance");
           return;
         }
+
         const data = await response.json();
-        if (!response.ok) throw new Error(apiError(response.status, data?.detail));
+
+        if (!response.ok) {
+          throw new Error(apiError(response.status, data?.detail));
+        }
+
+        if (cancelled) return;
+
         setBrands(data);
         setBrandId(data[0]?.id || "");
       } catch (caught) {
+        if (cancelled) return;
+
+        setBrands([]);
+        setBrandId("");
+        setSnapshot(emptySnapshot);
+        setAction(null);
+        setForm({});
         setError(caught instanceof Error ? caught.message : "品牌清單載入失敗。");
       }
     }
+
     void loadBrands();
-  }, [router, workspaceId]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resetGovernanceScope, router, workspaceId]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -327,7 +387,7 @@ export default function GovernancePage() {
 
         <section className="governance-scope" aria-label="治理範圍">
           <label>Workspace
-            <select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}>
+            <select value={workspaceId} onChange={(event) => changeWorkspace(event.target.value)}>
               {me.workspaces.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.role}</option>)}
             </select>
           </label>
