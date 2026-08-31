@@ -878,6 +878,149 @@ async def test_p5_c10_real_postgresql_human_remediation_contract() -> None:
 
 
 @pytest.mark.asyncio
+async def test_p5_c11_real_postgresql_governance_evidence_case_closure_contract() -> None:
+    import json
+    from sqlalchemy.exc import IntegrityError
+
+    workspace_id = integration_uuid("p5-c11-governance-workspace")
+    other_workspace_id = integration_uuid("p5-c11-governance-other-workspace")
+    user_id = integration_uuid("p5-c11-governance-user")
+    brand_id = integration_uuid("p5-c11-governance-brand")
+    policy_id = integration_uuid("p5-c11-governance-policy")
+    target_activation_id = integration_uuid("p5-c11-governance-target-activation")
+    source_activation_id = integration_uuid("p5-c11-governance-source-activation")
+    observation_id = integration_uuid("p5-c11-governance-observation")
+    degradation_id = integration_uuid("p5-c11-governance-degradation")
+    remediation_id = integration_uuid("p5-c11-governance-remediation")
+    case_id = integration_uuid("p5-c11-governance-case")
+    manifest_sha = "a" * 64
+
+    async def remove_rows() -> None:
+        async with Session.begin() as db:
+            await db.execute(text("DELETE FROM ai_quality_policy_governance_case_audits WHERE workspace_id=:id"), {"id": workspace_id})
+            await db.execute(text("DELETE FROM ai_quality_policy_governance_evidence_items WHERE workspace_id=:id"), {"id": workspace_id})
+            await db.execute(text("DELETE FROM ai_quality_policy_governance_cases WHERE workspace_id=:id"), {"id": workspace_id})
+            await db.execute(text("DELETE FROM workspaces WHERE id = ANY(:ids)"), {"ids": [workspace_id, other_workspace_id]})
+            await db.execute(text("DELETE FROM users WHERE id=:id"), {"id": user_id})
+
+    await remove_rows()
+    try:
+        async with Session.begin() as db:
+            await db.execute(text("INSERT INTO users (id,email,is_active,created_at) VALUES (:id,:email,true,now())"), {"id": user_id, "email": RUN_TOKEN + "-governance@example.invalid"})
+            for value, suffix in ((workspace_id, "governance"), (other_workspace_id, "governance-other")):
+                await db.execute(text("INSERT INTO workspaces (id,name,slug,created_at) VALUES (:id,:name,:slug,now())"), {"id": value, "name": f"{RUN_TOKEN}-{suffix}", "slug": f"{RUN_TOKEN}-{suffix}"})
+            await db.execute(text("INSERT INTO brands (id,workspace_id,name,language,created_at) VALUES (:id,:workspace_id,:name,'en',now())"), {"id": brand_id, "workspace_id": workspace_id, "name": RUN_TOKEN})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_recommendations (
+                    id,workspace_id,brand_id,version,status,minimum_quality_score,
+                    minimum_cohort_size,maximum_workspace_contribution,observation_count,
+                    distinct_workspace_count,average_quality_score,average_rating,
+                    confidence_score,recommendation_reason,provenance,approved_by_user_id,
+                    approved_at,created_at,updated_at
+                ) VALUES (:id,:workspace_id,:brand_id,1,'approved',70,12,6,18,3,
+                    75,4,90,'aggregate_quality_within_target','clipped_aggregate_quality_feedback',
+                    :user_id,now(),now(),now())
+            """), {"id": policy_id, "workspace_id": workspace_id, "brand_id": brand_id, "user_id": user_id})
+            for activation_id, version, status in ((target_activation_id, 1, "active"), (source_activation_id, 2, "rolled_back")):
+                await db.execute(text("""
+                    INSERT INTO ai_quality_policy_activations (
+                        id,workspace_id,brand_id,recommendation_id,version,policy_version,
+                        mode,status,minimum_quality_score,minimum_cohort_size,
+                        maximum_workspace_contribution,effective_at,activated_by_user_id,
+                        idempotency_key,created_at,updated_at
+                    ) VALUES (:id,:workspace_id,:brand_id,:policy_id,:version,:version,
+                        'enforced',:status,70,12,6,now(),:user_id,:key,now(),now())
+                """), {"id": activation_id, "workspace_id": workspace_id, "brand_id": brand_id, "policy_id": policy_id, "version": version, "status": status, "user_id": user_id, "key": f"p5-c11-activation-{version}"})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_effect_observations (
+                    id,workspace_id,brand_id,activation_id,observation_count,
+                    minimum_cohort_size,maximum_workspace_contribution,
+                    baseline_quality_score,observed_quality_score,quality_delta,
+                    baseline_failure_rate,observed_failure_rate,confidence_score,
+                    consecutive_degraded_windows,state,provenance,
+                    window_started_at,window_ended_at,created_at
+                ) VALUES (:id,:workspace_id,:brand_id,:activation_id,18,12,6,
+                    80,68,-12,0.10,0.30,90,2,'degraded',
+                    'clipped_aggregate_policy_effects',now()-interval '1 hour',now(),now())
+            """), {"id": observation_id, "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": source_activation_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_degradation_recommendations (
+                    id,observation_id,workspace_id,brand_id,activation_id,action,status,
+                    confidence_score,reason,reviewed_by_user_id,reviewed_at,review_reason,created_at
+                ) VALUES (:id,:observation_id,:workspace_id,:brand_id,:activation_id,
+                    'rollback','accepted',90,'sustained_policy_effect_degradation',
+                    :user_id,now(),'human accepted degradation',now())
+            """), {"id": degradation_id, "observation_id": observation_id, "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": source_activation_id, "user_id": user_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_remediations (
+                    id,degradation_recommendation_id,workspace_id,brand_id,
+                    source_activation_id,target_activation_id,expected_policy_version,
+                    status,idempotency_key,proposal_reason,closure_reason,
+                    observation_window_count,recovery_threshold,proposed_by_user_id,
+                    closed_by_user_id,closed_at,created_at,updated_at
+                ) VALUES (:id,:degradation_id,:workspace_id,:brand_id,:source_id,:target_id,
+                    2,'recovered','p5-c11-remediation-key','human remediation proposal',
+                    'human recovery confirmed',3,75,:user_id,:user_id,now(),now(),now())
+            """), {"id": remediation_id, "degradation_id": degradation_id, "workspace_id": workspace_id, "brand_id": brand_id, "source_id": source_activation_id, "target_id": target_activation_id, "user_id": user_id})
+            summary = {"remediation_id": str(remediation_id), "policy_version": 2, "local_export_only": True, "external_transport_performed": False}
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_governance_cases (
+                    id,remediation_id,workspace_id,brand_id,activation_id,policy_version,
+                    remediation_status_snapshot,status,idempotency_key,
+                    evidence_manifest_sha256,evidence_item_count,governance_summary,
+                    created_by_user_id,created_at,updated_at
+                ) VALUES (:id,:remediation_id,:workspace_id,:brand_id,:activation_id,2,
+                    'recovered','open','p5-c11-governance-key',:manifest_sha,1,
+                    CAST(:summary AS jsonb),:user_id,now(),now())
+            """), {"id": case_id, "remediation_id": remediation_id, "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": target_activation_id, "manifest_sha": manifest_sha, "summary": json.dumps(summary), "user_id": user_id})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_governance_evidence_items (
+                    id,case_id,workspace_id,sequence,evidence_type,source_table,
+                    source_record_id,source_state,payload_sha256,payload,created_at
+                ) VALUES (:id,:case_id,:workspace_id,1,'remediation',
+                    'ai_quality_policy_remediations',:remediation_id,'recovered',
+                    :payload_sha,CAST(:payload AS jsonb),now())
+            """), {"id": integration_uuid("p5-c11-governance-evidence"), "case_id": case_id, "workspace_id": workspace_id, "remediation_id": remediation_id, "payload_sha": "b" * 64, "payload": json.dumps({"status": "recovered", "policy_version": 2})})
+            await db.execute(text("""
+                INSERT INTO ai_quality_policy_governance_case_audits (
+                    id,case_id,workspace_id,actor_user_id,action,previous_status,
+                    new_status,reason,created_at
+                ) VALUES (:id,:case_id,:workspace_id,:user_id,'opened',NULL,
+                    'open','explicit human governance case opening',now())
+            """), {"id": integration_uuid("p5-c11-governance-audit"), "case_id": case_id, "workspace_id": workspace_id, "user_id": user_id})
+
+        async with Session() as db:
+            row = (await db.execute(text("""
+                SELECT c.status::text,c.policy_version,c.evidence_item_count,
+                       e.evidence_type::text,e.sequence,a.action::text,
+                       c.governance_summary->>'local_export_only'
+                FROM ai_quality_policy_governance_cases c
+                JOIN ai_quality_policy_governance_evidence_items e ON e.case_id=c.id
+                JOIN ai_quality_policy_governance_case_audits a ON a.case_id=c.id
+                WHERE c.id=:id AND c.workspace_id=:workspace_id
+            """), {"id": case_id, "workspace_id": workspace_id})).one()
+            assert tuple(row) == ("open", 2, 1, "remediation", 1, "opened", "true")
+            leaked = await db.scalar(text("SELECT count(*) FROM ai_quality_policy_governance_cases WHERE id=:id AND workspace_id=:workspace_id"), {"id": case_id, "workspace_id": other_workspace_id})
+            assert leaked == 0
+
+        with pytest.raises(IntegrityError):
+            async with Session.begin() as db:
+                await db.execute(text("""
+                    INSERT INTO ai_quality_policy_governance_cases (
+                        id,remediation_id,workspace_id,brand_id,activation_id,policy_version,
+                        remediation_status_snapshot,status,idempotency_key,
+                        evidence_manifest_sha256,evidence_item_count,governance_summary,
+                        created_at,updated_at
+                    ) VALUES (:id,:remediation_id,:workspace_id,:brand_id,:activation_id,0,
+                        'recovered','open','p5-c11-invalid-key',:manifest_sha,0,
+                        CAST(:summary AS jsonb),now(),now())
+                """), {"id": integration_uuid("p5-c11-invalid-governance"), "remediation_id": integration_uuid("p5-c11-invalid-remediation"), "workspace_id": workspace_id, "brand_id": brand_id, "activation_id": target_activation_id, "manifest_sha": manifest_sha, "summary": json.dumps({})})
+    finally:
+        await remove_rows()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_p5_c7_real_postgresql_quality_policy_governance_contract() -> None:
     from sqlalchemy.exc import IntegrityError
 
