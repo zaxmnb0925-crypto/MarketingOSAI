@@ -72,6 +72,7 @@ export default function DashboardPage() {
             <a className="nav-item" href="/brands">品牌管理</a>
             <a className="nav-item" href="/create">AI 創作</a>
             <a className="nav-item" href="/history">內容歷史</a>
+            <a className="nav-item" href="/governance">品質治理</a>
           </nav>
         </div>
         <button className="logout-button" onClick={logout}>登出</button>

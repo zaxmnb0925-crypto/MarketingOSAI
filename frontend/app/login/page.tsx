@@ -63,8 +63,9 @@ export default function LoginPage() {
       ).get("next");
 
       router.replace(
-        nextPath === "/admin"
-          ? "/admin"
+        nextPath === "/admin" ||
+        nextPath === "/governance"
+          ? nextPath
           : "/dashboard",
       );
       router.refresh();
