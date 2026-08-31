@@ -19,6 +19,7 @@ from app.models.ai_quality_policy_effect import (
     AIQualityPolicyDegradationStatus,
     AIQualityPolicyEffectState,
 )
+from app.models.ai_quality_policy_remediation import AIQualityPolicyRemediationStatus
 
 
 class ContentPreviewRequest(BaseModel):
@@ -194,3 +195,51 @@ class AIQualityPolicyDegradationReviewRequest(BaseModel):
 
     status: AIQualityPolicyDegradationStatus
     reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyRemediationProposalRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    degradation_recommendation_id: UUID
+    source_activation_id: UUID
+    target_activation_id: UUID
+    expected_policy_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    observation_window_count: int = Field(ge=1, le=100)
+    recovery_threshold: int = Field(ge=0, le=100)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyRemediationDecisionRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    approve: bool
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyRemediationExecutionRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    result_activation_id: UUID
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyRemediationClosureRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    observed_window_count: int = Field(ge=0, le=100)
+    observed_quality_score: int = Field(ge=0, le=100)
+    human_confirms_recovery: bool
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIQualityPolicyRemediationResponse(BaseModel):
+    id: UUID
+    degradation_recommendation_id: UUID
+    source_activation_id: UUID
+    target_activation_id: UUID
+    expected_policy_version: int
+    status: AIQualityPolicyRemediationStatus
+    observation_window_count: int
+    recovery_threshold: int
+    approved_at: datetime | None
+    observation_started_at: datetime | None
+    observation_ended_at: datetime | None
+    closed_at: datetime | None
+    created_at: datetime

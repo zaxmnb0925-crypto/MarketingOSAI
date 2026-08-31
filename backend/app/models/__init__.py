@@ -81,6 +81,19 @@ __all__.extend([
     "AIQualityPolicyEffectState",
 ])
 
+from app.models.ai_quality_policy_remediation import (
+    AIQualityPolicyRemediation,
+    AIQualityPolicyRemediationAction,
+    AIQualityPolicyRemediationAudit,
+    AIQualityPolicyRemediationStatus,
+)
+__all__.extend([
+    "AIQualityPolicyRemediation",
+    "AIQualityPolicyRemediationAction",
+    "AIQualityPolicyRemediationAudit",
+    "AIQualityPolicyRemediationStatus",
+])
+
 from app.models.social_account import (
     SocialAccount,
     SocialAccountStatus,
