@@ -20,6 +20,8 @@ from app.models.ai_quality_policy_effect import (
     AIQualityPolicyEffectState,
 )
 from app.models.ai_quality_policy_remediation import AIQualityPolicyRemediationStatus
+from app.models.ai_quality_policy_governance import AIQualityPolicyGovernanceCaseStatus
+from app.services.ai_quality_policy_governance import GovernanceClosureDecision
 
 
 class ContentPreviewRequest(BaseModel):
@@ -241,5 +243,45 @@ class AIQualityPolicyRemediationResponse(BaseModel):
     approved_at: datetime | None
     observation_started_at: datetime | None
     observation_ended_at: datetime | None
+    closed_at: datetime | None
+    created_at: datetime
+
+
+class AIQualityPolicyGovernanceCaseOpenRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    remediation_id: UUID
+    expected_policy_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class AIQualityPolicyGovernanceCaseClosureRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    decision: GovernanceClosureDecision
+    expected_manifest_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    human_confirms_closure: bool
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class AIQualityPolicyGovernanceEvidenceItemResponse(BaseModel):
+    sequence: int
+    evidence_type: str
+    source_table: str
+    source_record_id: UUID
+    source_state: str
+    payload_sha256: str
+
+
+class AIQualityPolicyGovernanceCaseResponse(BaseModel):
+    id: UUID
+    remediation_id: UUID
+    activation_id: UUID
+    policy_version: int
+    remediation_status_snapshot: str
+    status: AIQualityPolicyGovernanceCaseStatus
+    evidence_manifest_sha256: str
+    evidence_item_count: int
+    governance_summary: dict
+    closure_reason: str | None
     closed_at: datetime | None
     created_at: datetime

@@ -94,6 +94,23 @@ __all__.extend([
     "AIQualityPolicyRemediationStatus",
 ])
 
+from app.models.ai_quality_policy_governance import (
+    AIQualityPolicyGovernanceCase,
+    AIQualityPolicyGovernanceCaseAction,
+    AIQualityPolicyGovernanceCaseAudit,
+    AIQualityPolicyGovernanceCaseStatus,
+    AIQualityPolicyGovernanceEvidenceItem,
+    AIQualityPolicyGovernanceEvidenceType,
+)
+__all__.extend([
+    "AIQualityPolicyGovernanceCase",
+    "AIQualityPolicyGovernanceCaseAction",
+    "AIQualityPolicyGovernanceCaseAudit",
+    "AIQualityPolicyGovernanceCaseStatus",
+    "AIQualityPolicyGovernanceEvidenceItem",
+    "AIQualityPolicyGovernanceEvidenceType",
+])
+
 from app.models.social_account import (
     SocialAccount,
     SocialAccountStatus,

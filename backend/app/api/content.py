@@ -46,6 +46,14 @@ from app.models.ai_quality_policy_remediation import (
     AIQualityPolicyRemediationAudit,
     AIQualityPolicyRemediationStatus,
 )
+from app.models.ai_quality_policy_governance import (
+    AIQualityPolicyGovernanceCase,
+    AIQualityPolicyGovernanceCaseAction,
+    AIQualityPolicyGovernanceCaseAudit,
+    AIQualityPolicyGovernanceCaseStatus,
+    AIQualityPolicyGovernanceEvidenceItem,
+    AIQualityPolicyGovernanceEvidenceType,
+)
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
@@ -67,6 +75,9 @@ from app.schemas.content import (
     AIQualityPolicyRemediationExecutionRequest,
     AIQualityPolicyRemediationProposalRequest,
     AIQualityPolicyRemediationResponse,
+    AIQualityPolicyGovernanceCaseClosureRequest,
+    AIQualityPolicyGovernanceCaseOpenRequest,
+    AIQualityPolicyGovernanceCaseResponse,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -98,6 +109,14 @@ from app.services.ai_quality_policy_remediation import (
     plan_remediation_decision,
     validate_remediation_execution,
     validate_remediation_proposal,
+)
+from app.services.ai_quality_policy_governance import (
+    GovernanceConcurrencyConflict,
+    GovernanceEvidenceInput,
+    QualityPolicyGovernanceError,
+    build_governance_evidence_manifest,
+    plan_governance_case_closure,
+    validate_governance_case_opening,
 )
 from app.services.ai_credits import (
     AICreditAccountingConflict,
@@ -1129,6 +1148,232 @@ async def close_quality_policy_remediation(
     await db.commit()
     await db.refresh(item)
     return serialize_quality_policy_remediation(item)
+
+
+def serialize_quality_policy_governance_case(
+    item: AIQualityPolicyGovernanceCase,
+) -> AIQualityPolicyGovernanceCaseResponse:
+    return AIQualityPolicyGovernanceCaseResponse(
+        id=item.id,
+        remediation_id=item.remediation_id,
+        activation_id=item.activation_id,
+        policy_version=item.policy_version,
+        remediation_status_snapshot=item.remediation_status_snapshot,
+        status=item.status,
+        evidence_manifest_sha256=item.evidence_manifest_sha256,
+        evidence_item_count=item.evidence_item_count,
+        governance_summary=item.governance_summary,
+        closure_reason=item.closure_reason,
+        closed_at=item.closed_at,
+        created_at=item.created_at,
+    )
+
+
+@router.get(
+    "/quality-policy/governance-cases",
+    response_model=list[AIQualityPolicyGovernanceCaseResponse],
+)
+async def list_quality_policy_governance_cases(
+    workspace_id: UUID,
+    brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    result = await db.execute(
+        select(AIQualityPolicyGovernanceCase)
+        .where(
+            AIQualityPolicyGovernanceCase.workspace_id == workspace_id,
+            AIQualityPolicyGovernanceCase.brand_id == brand_id,
+        )
+        .order_by(AIQualityPolicyGovernanceCase.created_at.desc())
+    )
+    return [serialize_quality_policy_governance_case(item) for item in result.scalars().all()]
+
+
+@router.post(
+    "/quality-policy/governance-cases",
+    response_model=AIQualityPolicyGovernanceCaseResponse,
+)
+async def open_quality_policy_governance_case(
+    workspace_id: UUID,
+    brand_id: UUID,
+    payload: AIQualityPolicyGovernanceCaseOpenRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    existing = await db.scalar(
+        select(AIQualityPolicyGovernanceCase).where(
+            AIQualityPolicyGovernanceCase.workspace_id == workspace_id,
+            AIQualityPolicyGovernanceCase.brand_id == brand_id,
+            AIQualityPolicyGovernanceCase.idempotency_key == payload.idempotency_key,
+        )
+    )
+    if existing is not None:
+        if existing.remediation_id != payload.remediation_id:
+            raise HTTPException(status_code=409, detail="Idempotency key conflict")
+        return serialize_quality_policy_governance_case(existing)
+    remediation = await db.scalar(
+        select(AIQualityPolicyRemediation)
+        .where(
+            AIQualityPolicyRemediation.id == payload.remediation_id,
+            AIQualityPolicyRemediation.workspace_id == workspace_id,
+            AIQualityPolicyRemediation.brand_id == brand_id,
+        )
+        .with_for_update()
+    )
+    if remediation is None:
+        raise HTTPException(status_code=404, detail="Remediation not found")
+    degradation = await db.scalar(
+        select(AIQualityPolicyDegradationRecommendation).where(
+            AIQualityPolicyDegradationRecommendation.id == remediation.degradation_recommendation_id,
+            AIQualityPolicyDegradationRecommendation.workspace_id == workspace_id,
+            AIQualityPolicyDegradationRecommendation.brand_id == brand_id,
+        )
+    )
+    activation = await db.scalar(
+        select(AIQualityPolicyActivation).where(
+            AIQualityPolicyActivation.id == remediation.target_activation_id,
+            AIQualityPolicyActivation.workspace_id == workspace_id,
+            AIQualityPolicyActivation.brand_id == brand_id,
+        )
+    )
+    if degradation is None or activation is None:
+        raise HTTPException(status_code=404, detail="Governance evidence foundation not found")
+    observation = await db.scalar(
+        select(AIQualityPolicyEffectObservation).where(
+            AIQualityPolicyEffectObservation.id == degradation.observation_id,
+            AIQualityPolicyEffectObservation.workspace_id == workspace_id,
+            AIQualityPolicyEffectObservation.brand_id == brand_id,
+        )
+    )
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Governance observation not found")
+    try:
+        validate_governance_case_opening(
+            remediation_status=remediation.status,
+            remediation_workspace_id=remediation.workspace_id,
+            remediation_brand_id=remediation.brand_id,
+            workspace_id=workspace_id,
+            brand_id=brand_id,
+            expected_policy_version=payload.expected_policy_version,
+            remediation_policy_version=remediation.expected_policy_version,
+        )
+        evidence, manifest_sha = build_governance_evidence_manifest([
+            GovernanceEvidenceInput("remediation", "ai_quality_policy_remediations", remediation.id, remediation.status.value, {"status": remediation.status.value, "expected_policy_version": remediation.expected_policy_version, "source_activation_id": str(remediation.source_activation_id), "target_activation_id": str(remediation.target_activation_id)}),
+            GovernanceEvidenceInput("degradation", "ai_quality_policy_degradation_recommendations", degradation.id, degradation.status.value, {"status": degradation.status.value, "action": degradation.action.value, "confidence_score": degradation.confidence_score}),
+            GovernanceEvidenceInput("observation", "ai_quality_policy_effect_observations", observation.id, observation.state.value, {"state": observation.state.value, "observed_quality_score": str(observation.observed_quality_score), "confidence_score": observation.confidence_score}),
+            GovernanceEvidenceInput("activation", "ai_quality_policy_activations", activation.id, activation.status.value, {"status": activation.status.value, "policy_version": activation.policy_version, "mode": activation.mode.value}),
+        ])
+    except (QualityPolicyGovernanceError, GovernanceConcurrencyConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    summary = {
+        "remediation_id": str(remediation.id),
+        "remediation_status": remediation.status.value,
+        "policy_version": remediation.expected_policy_version,
+        "activation_id": str(activation.id),
+        "evidence_manifest_sha256": manifest_sha,
+        "evidence_item_count": len(evidence),
+        "local_export_only": True,
+        "external_transport_performed": False,
+    }
+    item = AIQualityPolicyGovernanceCase(
+        remediation_id=remediation.id,
+        workspace_id=workspace_id,
+        brand_id=brand_id,
+        activation_id=activation.id,
+        policy_version=remediation.expected_policy_version,
+        remediation_status_snapshot=remediation.status.value,
+        status=AIQualityPolicyGovernanceCaseStatus.open,
+        idempotency_key=payload.idempotency_key,
+        evidence_manifest_sha256=manifest_sha,
+        evidence_item_count=len(evidence),
+        governance_summary=summary,
+        created_by_user_id=current_user.id,
+    )
+    db.add(item)
+    await db.flush()
+    for snapshot in evidence:
+        db.add(AIQualityPolicyGovernanceEvidenceItem(
+            case_id=item.id,
+            workspace_id=workspace_id,
+            sequence=snapshot.sequence,
+            evidence_type=AIQualityPolicyGovernanceEvidenceType(snapshot.evidence_type),
+            source_table=snapshot.source_table,
+            source_record_id=snapshot.source_record_id,
+            source_state=snapshot.source_state,
+            payload_sha256=snapshot.payload_sha256,
+            payload=snapshot.payload,
+        ))
+    db.add(AIQualityPolicyGovernanceCaseAudit(
+        case_id=item.id,
+        workspace_id=workspace_id,
+        actor_user_id=current_user.id,
+        action=AIQualityPolicyGovernanceCaseAction.opened,
+        previous_status=None,
+        new_status=item.status,
+        reason=payload.reason,
+    ))
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_governance_case(item)
+
+
+@router.post(
+    "/quality-policy/governance-cases/{case_id}/closure",
+    response_model=AIQualityPolicyGovernanceCaseResponse,
+)
+async def close_quality_policy_governance_case(
+    workspace_id: UUID,
+    brand_id: UUID,
+    case_id: UUID,
+    payload: AIQualityPolicyGovernanceCaseClosureRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    item = await db.scalar(
+        select(AIQualityPolicyGovernanceCase)
+        .where(
+            AIQualityPolicyGovernanceCase.id == case_id,
+            AIQualityPolicyGovernanceCase.workspace_id == workspace_id,
+            AIQualityPolicyGovernanceCase.brand_id == brand_id,
+        )
+        .with_for_update()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Governance case not found")
+    previous = item.status
+    try:
+        item.status = plan_governance_case_closure(
+            current_status=item.status,
+            expected_manifest_sha256=payload.expected_manifest_sha256,
+            current_manifest_sha256=item.evidence_manifest_sha256,
+            decision=payload.decision,
+            human_confirms_closure=payload.human_confirms_closure,
+            reason=payload.reason,
+        )
+    except (QualityPolicyGovernanceError, GovernanceConcurrencyConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    item.closure_reason = payload.reason
+    item.closed_by_user_id = current_user.id
+    item.closed_at = datetime.now(timezone.utc)
+    db.add(AIQualityPolicyGovernanceCaseAudit(
+        case_id=item.id,
+        workspace_id=workspace_id,
+        actor_user_id=current_user.id,
+        action=AIQualityPolicyGovernanceCaseAction(item.status.value),
+        previous_status=previous,
+        new_status=item.status,
+        reason=payload.reason,
+    ))
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_governance_case(item)
 
 
 @router.get(
