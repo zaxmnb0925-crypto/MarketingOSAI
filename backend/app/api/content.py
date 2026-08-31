@@ -40,6 +40,12 @@ from app.models.ai_quality_policy_effect import (
     AIQualityPolicyDegradationStatus,
     AIQualityPolicyEffectObservation,
 )
+from app.models.ai_quality_policy_remediation import (
+    AIQualityPolicyRemediation,
+    AIQualityPolicyRemediationAction,
+    AIQualityPolicyRemediationAudit,
+    AIQualityPolicyRemediationStatus,
+)
 from app.schemas.content import (
     ContentGenerationResponse,
     ContentPreviewRequest,
@@ -56,6 +62,11 @@ from app.schemas.content import (
     AIQualityPolicyDegradationRecommendationResponse,
     AIQualityPolicyDegradationReviewRequest,
     AIQualityPolicyEffectObservationResponse,
+    AIQualityPolicyRemediationClosureRequest,
+    AIQualityPolicyRemediationDecisionRequest,
+    AIQualityPolicyRemediationExecutionRequest,
+    AIQualityPolicyRemediationProposalRequest,
+    AIQualityPolicyRemediationResponse,
 )
 from app.schemas.keyword_intelligence import (
     IntelligenceContextQueryParameters,
@@ -78,6 +89,15 @@ from app.services.ai_quality_policy_activation import (
     plan_policy_activation,
     plan_policy_rollback,
     validate_activation_window,
+)
+from app.services.ai_quality_policy_remediation import (
+    QualityPolicyRemediationError,
+    RemediationDecision,
+    RemediationScopeSnapshot,
+    plan_recovery_closure,
+    plan_remediation_decision,
+    validate_remediation_execution,
+    validate_remediation_proposal,
 )
 from app.services.ai_credits import (
     AICreditAccountingConflict,
@@ -858,6 +878,257 @@ async def review_quality_policy_degradation_recommendation(
     await db.commit()
     await db.refresh(item)
     return serialize_degradation_recommendation(item)
+
+
+def serialize_quality_policy_remediation(
+    item: AIQualityPolicyRemediation,
+) -> AIQualityPolicyRemediationResponse:
+    return AIQualityPolicyRemediationResponse(
+        id=item.id,
+        degradation_recommendation_id=item.degradation_recommendation_id,
+        source_activation_id=item.source_activation_id,
+        target_activation_id=item.target_activation_id,
+        expected_policy_version=item.expected_policy_version,
+        status=item.status,
+        observation_window_count=item.observation_window_count,
+        recovery_threshold=item.recovery_threshold,
+        approved_at=item.approved_at,
+        observation_started_at=item.observation_started_at,
+        observation_ended_at=item.observation_ended_at,
+        closed_at=item.closed_at,
+        created_at=item.created_at,
+    )
+
+
+def add_remediation_audit(
+    db: AsyncSession, item: AIQualityPolicyRemediation,
+    actor_user_id: UUID, action: AIQualityPolicyRemediationAction,
+    previous_status: AIQualityPolicyRemediationStatus | None, reason: str,
+) -> None:
+    db.add(AIQualityPolicyRemediationAudit(
+        remediation_id=item.id, workspace_id=item.workspace_id,
+        actor_user_id=actor_user_id, action=action,
+        previous_status=previous_status, new_status=item.status,
+        reason=reason.strip(),
+    ))
+
+
+@router.get(
+    "/quality-policy/remediations",
+    response_model=list[AIQualityPolicyRemediationResponse],
+)
+async def list_quality_policy_remediations(
+    workspace_id: UUID, brand_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    result = await db.execute(select(AIQualityPolicyRemediation).where(
+        AIQualityPolicyRemediation.workspace_id == workspace_id,
+        AIQualityPolicyRemediation.brand_id == brand_id,
+    ).order_by(AIQualityPolicyRemediation.created_at.desc()))
+    return [serialize_quality_policy_remediation(item) for item in result.scalars().all()]
+
+
+@router.post(
+    "/quality-policy/remediations",
+    response_model=AIQualityPolicyRemediationResponse,
+)
+async def propose_quality_policy_remediation(
+    workspace_id: UUID, brand_id: UUID,
+    payload: AIQualityPolicyRemediationProposalRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    existing = await db.scalar(select(AIQualityPolicyRemediation).where(
+        AIQualityPolicyRemediation.workspace_id == workspace_id,
+        AIQualityPolicyRemediation.brand_id == brand_id,
+        AIQualityPolicyRemediation.idempotency_key == payload.idempotency_key,
+    ))
+    if existing is not None:
+        if existing.degradation_recommendation_id != payload.degradation_recommendation_id:
+            raise HTTPException(status_code=409, detail="Idempotency key conflict")
+        return serialize_quality_policy_remediation(existing)
+    degradation = await db.scalar(select(AIQualityPolicyDegradationRecommendation).where(
+        AIQualityPolicyDegradationRecommendation.id == payload.degradation_recommendation_id,
+        AIQualityPolicyDegradationRecommendation.workspace_id == workspace_id,
+        AIQualityPolicyDegradationRecommendation.brand_id == brand_id,
+    ).with_for_update())
+    source = await db.scalar(select(AIQualityPolicyActivation).where(
+        AIQualityPolicyActivation.id == payload.source_activation_id,
+        AIQualityPolicyActivation.workspace_id == workspace_id,
+        AIQualityPolicyActivation.brand_id == brand_id,
+        AIQualityPolicyActivation.status == AIQualityPolicyActivationStatus.active,
+    ).with_for_update())
+    target = await db.scalar(select(AIQualityPolicyActivation).where(
+        AIQualityPolicyActivation.id == payload.target_activation_id,
+        AIQualityPolicyActivation.workspace_id == workspace_id,
+        AIQualityPolicyActivation.brand_id == brand_id,
+    ).with_for_update())
+    if degradation is None or source is None or target is None:
+        raise HTTPException(status_code=404, detail="Remediation foundation not found")
+    try:
+        validate_remediation_proposal(
+            degradation_status=degradation.status, degradation_action=degradation.action,
+            degradation_activation_id=degradation.activation_id,
+            expected_active_activation_id=source.id,
+            target_activation_id=target.id, target_policy_version=target.policy_version,
+        )
+    except QualityPolicyRemediationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if payload.expected_policy_version != source.policy_version:
+        raise HTTPException(status_code=409, detail="Active policy version changed")
+    item = AIQualityPolicyRemediation(
+        degradation_recommendation_id=degradation.id, workspace_id=workspace_id,
+        brand_id=brand_id, source_activation_id=source.id,
+        target_activation_id=target.id, expected_policy_version=source.policy_version,
+        status=AIQualityPolicyRemediationStatus.proposed,
+        idempotency_key=payload.idempotency_key, proposal_reason=payload.reason,
+        observation_window_count=payload.observation_window_count,
+        recovery_threshold=payload.recovery_threshold,
+        proposed_by_user_id=current_user.id,
+    )
+    db.add(item)
+    await db.flush()
+    add_remediation_audit(db, item, current_user.id, AIQualityPolicyRemediationAction.proposed, None, payload.reason)
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_remediation(item)
+
+
+@router.post(
+    "/quality-policy/remediations/{remediation_id}/decision",
+    response_model=AIQualityPolicyRemediationResponse,
+)
+async def decide_quality_policy_remediation(
+    workspace_id: UUID, brand_id: UUID, remediation_id: UUID,
+    payload: AIQualityPolicyRemediationDecisionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    item = await db.scalar(select(AIQualityPolicyRemediation).where(
+        AIQualityPolicyRemediation.id == remediation_id,
+        AIQualityPolicyRemediation.workspace_id == workspace_id,
+        AIQualityPolicyRemediation.brand_id == brand_id,
+    ).with_for_update())
+    if item is None:
+        raise HTTPException(status_code=404, detail="Remediation not found")
+    previous = item.status
+    try:
+        item.status = plan_remediation_decision(
+            current_status=item.status,
+            decision=RemediationDecision.approve if payload.approve else RemediationDecision.reject,
+        )
+    except QualityPolicyRemediationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    item.decision_reason = payload.reason
+    action = AIQualityPolicyRemediationAction.approved if payload.approve else AIQualityPolicyRemediationAction.rejected
+    if payload.approve:
+        item.approved_by_user_id = current_user.id
+        item.approved_at = datetime.now(timezone.utc)
+    add_remediation_audit(db, item, current_user.id, action, previous, payload.reason)
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_remediation(item)
+
+
+@router.post(
+    "/quality-policy/remediations/{remediation_id}/execution-confirmation",
+    response_model=AIQualityPolicyRemediationResponse,
+)
+async def confirm_quality_policy_remediation_execution(
+    workspace_id: UUID, brand_id: UUID, remediation_id: UUID,
+    payload: AIQualityPolicyRemediationExecutionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    item = await db.scalar(select(AIQualityPolicyRemediation).where(
+        AIQualityPolicyRemediation.id == remediation_id,
+        AIQualityPolicyRemediation.workspace_id == workspace_id,
+        AIQualityPolicyRemediation.brand_id == brand_id,
+    ).with_for_update())
+    result = await db.scalar(select(AIQualityPolicyActivation).where(
+        AIQualityPolicyActivation.id == payload.result_activation_id,
+        AIQualityPolicyActivation.workspace_id == workspace_id,
+        AIQualityPolicyActivation.brand_id == brand_id,
+        AIQualityPolicyActivation.status == AIQualityPolicyActivationStatus.active,
+    ).with_for_update())
+    if item is None or result is None:
+        raise HTTPException(status_code=404, detail="Remediation execution foundation not found")
+    try:
+        validate_remediation_execution(
+            remediation_status=item.status,
+            expected_source_activation_id=item.source_activation_id,
+            expected_policy_version=item.expected_policy_version,
+            current=RemediationScopeSnapshot(
+                active_activation_id=item.source_activation_id,
+                active_policy_version=item.expected_policy_version,
+                active_status=AIQualityPolicyActivationStatus.active,
+            ),
+        )
+    except QualityPolicyRemediationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result.rolled_back_to_activation_id != item.target_activation_id:
+        raise HTTPException(status_code=409, detail="P5-C8 rollback target mismatch")
+    previous = item.status
+    item.status = AIQualityPolicyRemediationStatus.observation
+    item.execution_reason = payload.reason
+    item.executed_by_user_id = current_user.id
+    item.execution_started_at = datetime.now(timezone.utc)
+    item.observation_started_at = datetime.now(timezone.utc)
+    add_remediation_audit(db, item, current_user.id, AIQualityPolicyRemediationAction.observation_started, previous, payload.reason)
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_remediation(item)
+
+
+@router.post(
+    "/quality-policy/remediations/{remediation_id}/closure",
+    response_model=AIQualityPolicyRemediationResponse,
+)
+async def close_quality_policy_remediation(
+    workspace_id: UUID, brand_id: UUID, remediation_id: UUID,
+    payload: AIQualityPolicyRemediationClosureRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(db, current_user, workspace_id)
+    await get_brand_for_workspace(db, workspace_id, brand_id)
+    item = await db.scalar(select(AIQualityPolicyRemediation).where(
+        AIQualityPolicyRemediation.id == remediation_id,
+        AIQualityPolicyRemediation.workspace_id == workspace_id,
+        AIQualityPolicyRemediation.brand_id == brand_id,
+    ).with_for_update())
+    if item is None:
+        raise HTTPException(status_code=404, detail="Remediation not found")
+    previous = item.status
+    try:
+        item.status = plan_recovery_closure(
+            remediation_status=item.status,
+            observed_window_count=payload.observed_window_count,
+            required_window_count=item.observation_window_count,
+            observed_quality_score=payload.observed_quality_score,
+            recovery_threshold=item.recovery_threshold,
+            human_confirms_recovery=payload.human_confirms_recovery,
+        )
+    except QualityPolicyRemediationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    item.observation_ended_at = now
+    item.closed_at = now
+    item.closed_by_user_id = current_user.id
+    item.closure_reason = payload.reason
+    add_remediation_audit(db, item, current_user.id, AIQualityPolicyRemediationAction.recovered, previous, payload.reason)
+    await db.commit()
+    await db.refresh(item)
+    return serialize_quality_policy_remediation(item)
 
 
 @router.get(
