@@ -10,9 +10,12 @@ WORKDIR /app
 RUN addgroup -S appgroup && \
     adduser -S -D -H -G appgroup appuser
 
-COPY requirements.txt .
+COPY requirements.lock .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install \
+    --no-cache-dir \
+    --require-hashes \
+    -r requirements.lock
 
 COPY app ./app
 COPY alembic ./alembic
