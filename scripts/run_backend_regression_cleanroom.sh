@@ -64,6 +64,9 @@ mapfile -t TEST_FILES < <(
         ! -name 'test_publication_reconciliation_postgres_integration.py' \
         ! -name 'test_publication_publish_http_integration.py' \
         ! -name 'test_publication_publish_normal_mode_integration.py' \
+        ! -name 'test_p4_ai_accounting_postgres_integration.py' \
+        ! -name 'test_p5_keyword_intelligence_postgres_integration.py' \
+        ! -name 'test_p5_platform_admin_postgres_integration.py' \
         -print \
     | sort
 )
