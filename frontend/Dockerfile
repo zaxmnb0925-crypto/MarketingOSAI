@@ -34,9 +34,16 @@ COPY --from=builder --chown=node:node /app/public ./public
 
 USER root
 
-RUN rm -rf /app/node_modules/postcss /app/node_modules/sharp && \
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm && \
+    rm -f /usr/local/bin/npm /usr/local/bin/npx && \
+    rm -rf /app/node_modules/postcss /app/node_modules/sharp /app/node_modules/nanoid && \
+    test ! -e /usr/local/lib/node_modules/npm && \
+    test ! -e /usr/local/bin/npm && \
+    test ! -e /usr/local/bin/npx && \
     test ! -e /app/node_modules/postcss && \
-    test ! -e /app/node_modules/sharp
+    test ! -e /app/node_modules/sharp && \
+    test ! -e /app/node_modules/nanoid
 
 USER node
 
