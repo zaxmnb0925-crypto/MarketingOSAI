@@ -262,7 +262,7 @@ async def refresh(
     result = await db.execute(
         select(RefreshToken).where(
             RefreshToken.token_hash == digest
-        )
+        ).with_for_update()
     )
 
     stored = result.scalar_one_or_none()

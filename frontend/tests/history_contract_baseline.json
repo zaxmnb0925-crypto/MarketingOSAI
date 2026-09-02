@@ -17,7 +17,6 @@
     "history-empty",
     "history-error-box",
     "history-list",
-    "history-meta-grid",
     "history-platform",
     "history-summary-grid",
     "history-toolbar",
@@ -34,7 +33,7 @@
     "sidebar-brand",
     "sidebar-nav"
   ],
-  "class_name_count": 35,
+  "class_name_count": 34,
   "client_component": true,
   "fetch_count": 4,
   "fetch_literals": [
@@ -55,7 +54,7 @@
     "內容歷史"
   ],
   "jsx_counts": {
-    "article": 6,
+    "article": 5,
     "button": 3,
     "dialog": 0,
     "form": 0,

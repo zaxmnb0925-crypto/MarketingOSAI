@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 import type {
   MeResponse,
@@ -91,7 +92,7 @@ export default function HistoryPage() {
 
     try {
       const response =
-        await fetch(
+        await sessionFetch(
           `/api/workspaces/${workspaceId}/brands/${brandId}/content`,
           {
             cache: "no-store",
@@ -129,7 +130,7 @@ export default function HistoryPage() {
     async function boot() {
       try {
         const meResponse =
-          await fetch(
+          await sessionFetch(
             "/api/auth/me",
             {
               cache: "no-store",
@@ -162,7 +163,7 @@ export default function HistoryPage() {
         );
 
         const brandResponse =
-          await fetch(
+          await sessionFetch(
             `/api/workspaces/${currentWorkspace.id}/brands`,
             {
               cache: "no-store",

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 type Workspace = { id: string; name: string; slug: string; role: string };
 type MeResponse = {
@@ -31,14 +32,14 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadDashboard() {
       try {
-        const meResponse = await fetch("/api/auth/me", { cache: "no-store" });
+        const meResponse = await sessionFetch("/api/auth/me", { cache: "no-store" });
         if (meResponse.status === 401) { router.replace("/login"); return; }
         if (!meResponse.ok) throw new Error();
         const meData: MeResponse = await meResponse.json();
         const workspace = meData.workspaces[0];
         if (!workspace) throw new Error();
         setMe(meData);
-        const subscriptionResponse = await fetch(
+        const subscriptionResponse = await sessionFetch(
           `/api/workspaces/${workspace.id}/subscription`,
           { cache: "no-store" },
         );

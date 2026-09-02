@@ -2,6 +2,7 @@
 
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 import type {
   Brand,
@@ -102,7 +103,7 @@ export default function GovernancePage() {
   }, [brandId, workspaceId]);
 
   const governanceFetch = useCallback(async <T,>(path: string): Promise<T> => {
-    const response = await fetch(`${apiBase}/${path}`, { cache: "no-store" });
+    const response = await sessionFetch(`${apiBase}/${path}`, { cache: "no-store" });
     if (response.status === 401) {
       router.replace("/login?next=/governance");
       throw new Error("登入狀態已失效。");
@@ -154,7 +155,7 @@ export default function GovernancePage() {
   useEffect(() => {
     async function boot() {
       try {
-        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        const response = await sessionFetch("/api/auth/me", { cache: "no-store" });
         if (response.status === 401) {
           router.replace("/login?next=/governance");
           return;
@@ -185,7 +186,7 @@ export default function GovernancePage() {
 
     async function loadBrands() {
       try {
-        const response = await fetch(`/api/workspaces/${workspaceId}/brands`, { cache: "no-store" });
+        const response = await sessionFetch(`/api/workspaces/${workspaceId}/brands`, { cache: "no-store" });
 
         if (response.status === 401) {
           router.replace("/login?next=/governance");
@@ -331,7 +332,7 @@ export default function GovernancePage() {
           break;
       }
 
-      const response = await fetch(`${apiBase}/${path}`, {
+      const response = await sessionFetch(`${apiBase}/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

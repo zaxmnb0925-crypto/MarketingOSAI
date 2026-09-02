@@ -103,3 +103,13 @@ def test_registration_is_rate_limited_and_handles_unique_races():
     assert "window_seconds=3600" in source
     assert "except IntegrityError" in source
     assert "status.HTTP_409_CONFLICT" in source
+
+
+def test_refresh_rotation_locks_consumed_token_before_revocation():
+    source = inspect.getsource(auth.refresh)
+
+    assert ".with_for_update()" in source
+    assert source.index(".with_for_update()") < source.index(
+        "stored.revoked = True"
+    )
+    assert source.count("await db.commit()") == 1

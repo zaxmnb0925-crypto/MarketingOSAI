@@ -6,6 +6,7 @@ BACKEND_AUTH = ROOT / "backend/app/api/auth.py"
 SCHEMA = ROOT / "backend/app/schemas/auth.py"
 PAGE = ROOT / "frontend/app/register/page.tsx"
 BFF = ROOT / "frontend/app/api/auth/register/route.ts"
+AUTH_COOKIES = ROOT / "frontend/lib/auth-cookies.ts"
 LOGIN = ROOT / "frontend/app/login/page.tsx"
 CSS = ROOT / "frontend/app/globals.css"
 
@@ -44,13 +45,15 @@ def test_registration_schema_rejects_blank_names():
 
 def test_registration_bff_keeps_tokens_in_http_only_cookies():
     text = read(BFF)
+    cookies = read(AUTH_COOKIES)
     assert '"/api/auth/register"' in text
     assert 'method: "POST"' in text
-    assert '"marketingos_access_token"' in text
-    assert '"marketingos_refresh_token"' in text
-    assert "httpOnly: true" in text
-    assert 'sameSite: "lax"' in text
-    assert 'secure: process.env.NODE_ENV === "production"' in text
+    assert "setSessionCookies(" in text
+    assert '"marketingos_access_token"' in cookies
+    assert '"marketingos_refresh_token"' in cookies
+    assert "httpOnly: true" in cookies
+    assert 'sameSite: "lax"' in cookies
+    assert 'process.env.NODE_ENV === "production"' in cookies
 
 
 def test_public_registration_page_has_required_safe_flow():

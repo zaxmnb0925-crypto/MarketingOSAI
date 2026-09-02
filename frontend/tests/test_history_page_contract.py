@@ -180,7 +180,7 @@ pass_gate(
 
 fetch_pattern = re.compile(
     r'''
-    fetch
+    (?:fetch|sessionFetch)
     \s*\(
     \s*
     (?:

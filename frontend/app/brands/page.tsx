@@ -4,6 +4,7 @@ import { brandToForm, type Brand, type BrandForm } from "./_lib/brands-form";
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 type Workspace = {
   id: string;
@@ -66,7 +67,7 @@ export default function BrandsPage() {
   async function loadBrands(
     targetWorkspaceId: string,
   ) {
-    const response = await fetch(
+    const response = await sessionFetch(
       `/api/workspaces/${targetWorkspaceId}/brands`,
       {
         cache: "no-store",
@@ -94,7 +95,7 @@ export default function BrandsPage() {
     async function boot() {
       try {
         const response =
-          await fetch(
+          await sessionFetch(
             "/api/auth/me",
             {
               cache: "no-store",
@@ -196,7 +197,7 @@ export default function BrandsPage() {
         : `/api/workspaces/${workspaceId}/brands`;
 
       const response =
-        await fetch(url, {
+        await sessionFetch(url, {
           method: selectedId
             ? "PATCH"
             : "POST",
@@ -278,7 +279,7 @@ export default function BrandsPage() {
 
     try {
       const response =
-        await fetch(
+        await sessionFetch(
           `/api/workspaces/${workspaceId}/brands/${selectedId}`,
           {
             method: "DELETE",

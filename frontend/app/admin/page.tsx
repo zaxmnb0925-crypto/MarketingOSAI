@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 
 type AdminIdentity = {
@@ -113,7 +114,7 @@ export default function AdminPage() {
   useEffect(() => {
     async function loadIdentity() {
       try {
-        const response = await fetch("/api/admin/me", {
+        const response = await sessionFetch("/api/admin/me", {
           cache: "no-store",
         });
         if (handleAuthentication(response.status)) return;
@@ -142,7 +143,7 @@ export default function AdminPage() {
       });
       if (query) params.set("q", query);
       try {
-        const response = await fetch(
+        const response = await sessionFetch(
           `/api/admin/workspaces?${params.toString()}`,
           { cache: "no-store" },
         );
@@ -176,7 +177,7 @@ export default function AdminPage() {
       setSubscription(null);
       setSubscriptionMessage("");
       try {
-        const response = await fetch(
+        const response = await sessionFetch(
           `/api/admin/workspaces/${selected!.id}/subscription`,
           { cache: "no-store" },
         );
@@ -209,7 +210,7 @@ export default function AdminPage() {
       });
       if (paymentStatus) params.set("status", paymentStatus);
       try {
-        const response = await fetch(
+        const response = await sessionFetch(
           `/api/admin/workspaces/${selected!.id}/payments?${params.toString()}`,
           { cache: "no-store" },
         );

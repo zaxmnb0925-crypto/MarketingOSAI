@@ -17,7 +17,7 @@ def test_admin_page_is_read_only_and_covers_p5b2_surface():
     text = read(PAGE)
 
     for required in (
-        'fetch("/api/admin/me"',
+        'sessionFetch("/api/admin/me"',
         "/api/admin/workspaces?",
         "/subscription",
         "/payments?",

@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { backendFetch } from "@/lib/backend";
+import { clearSessionCookies } from "@/lib/auth-cookies";
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -33,31 +34,7 @@ export async function POST() {
     ok: true,
   });
 
-  response.cookies.set(
-    "marketingos_access_token",
-    "",
-    {
-      httpOnly: true,
-      sameSite: "lax",
-      secure:
-        process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 0,
-    },
-  );
-
-  response.cookies.set(
-    "marketingos_refresh_token",
-    "",
-    {
-      httpOnly: true,
-      sameSite: "lax",
-      secure:
-        process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 0,
-    },
-  );
+  clearSessionCookies(response);
 
   return response;
 }
