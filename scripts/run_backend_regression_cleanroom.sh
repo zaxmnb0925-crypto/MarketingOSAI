@@ -34,7 +34,7 @@ case "$MODE" in
         ;;
 esac
 
-export SECRET_KEY="test-only-synthetic-secret"
+export SECRET_KEY="test-only-synthetic-secret-at-least-32-bytes"
 export OPENAI_API_KEY="test-only-not-a-live-key"
 export OAUTH_TOKEN_ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 export API_DOCS_ENABLED=false

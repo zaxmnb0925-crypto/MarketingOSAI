@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import base64
+import binascii
 from urllib.parse import unquote, urlsplit
 
 
@@ -37,6 +39,30 @@ def _require_false(name: str) -> None:
     if _required(name).lower() != "false":
         raise TestIsolationError(
             f"test safety flag must be false: {name}"
+        )
+
+
+def _validate_security_keys() -> None:
+    secret_key = _required("SECRET_KEY")
+    if len(secret_key.encode("utf-8")) < 32:
+        raise TestIsolationError(
+            "SECRET_KEY must be at least 32 bytes"
+        )
+
+    fernet_key = _required("OAUTH_TOKEN_ENCRYPTION_KEY")
+    try:
+        decoded = base64.b64decode(
+            fernet_key.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise TestIsolationError(
+            "OAUTH_TOKEN_ENCRYPTION_KEY must be a valid Fernet key"
+        ) from exc
+    if len(decoded) != 32:
+        raise TestIsolationError(
+            "OAUTH_TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes"
         )
 
 
@@ -144,9 +170,8 @@ def validate_test_environment() -> str:
     _require_false("META_PUBLISH_TRANSPORT_ENABLED")
     _require_false("API_DOCS_ENABLED")
 
-    _required("SECRET_KEY")
     _required("OPENAI_API_KEY")
-    _required("OAUTH_TOKEN_ENCRYPTION_KEY")
+    _validate_security_keys()
 
     _validate_database_url(mode)
     _validate_redis_url(mode)

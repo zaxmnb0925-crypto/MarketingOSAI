@@ -193,7 +193,7 @@ def main(argv: list[str]) -> int:
     child_env = sanitized_subprocess_environment({
         "ENVIRONMENT": "test", "MARKETINGOS_TEST_MODE": "integration",
         "MARKETINGOS_TEST_RESOURCE_SCOPE": "disposable", "TEST_RUN_ID": run_id,
-        "SECRET_KEY": "test-only-synthetic-secret",
+        "SECRET_KEY": "test-only-synthetic-secret-at-least-32-bytes",
         "OPENAI_API_KEY": "test-only-not-a-live-key",
         "OAUTH_TOKEN_ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         "API_DOCS_ENABLED": "false", "REAL_PUBLISH_ENABLED": "false",

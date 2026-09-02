@@ -993,7 +993,7 @@ def test_migration_builds_exact_argv_cwd_and_scrubbed_env(tmp_path):
     assert set(env) == expected_environment
 
     assert env["REDIS_URL"] == "redis://127.0.0.1:1/15"
-    assert env["SECRET_KEY"] == "test-only-synthetic-secret"
+    assert env["SECRET_KEY"] == "test-only-synthetic-secret-at-least-32-bytes"
     assert env["OPENAI_API_KEY"] == "test-only-not-a-live-key"
     assert (
         env["OAUTH_TOKEN_ENCRYPTION_KEY"]

@@ -196,7 +196,7 @@ def build_migration_execution(*, sentinel_path: Path, run_id: str, image: str,
     env = sanitized_subprocess_environment({
         "DATABASE_URL": database_url,
         "REDIS_URL": "redis://127.0.0.1:1/15",
-        "SECRET_KEY": "test-only-synthetic-secret",
+        "SECRET_KEY": "test-only-synthetic-secret-at-least-32-bytes",
         "OPENAI_API_KEY": "test-only-not-a-live-key",
         "OAUTH_TOKEN_ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         "ENVIRONMENT": "test", "MARKETINGOS_TEST_MODE": "integration",
