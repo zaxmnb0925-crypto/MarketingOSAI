@@ -1,4 +1,4 @@
 services:
   frontend:
-    image: marketingos-frontend:v015-beta-rc1
+    image: marketingos-frontend@sha256:8c05022f639be8b799dedc5c62df411734b9e8545a689a17411149e3eee739ca
     pull_policy: never
