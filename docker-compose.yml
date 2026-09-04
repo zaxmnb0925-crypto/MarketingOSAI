@@ -1,7 +1,7 @@
 services:
 
   db:
-    image: marketingos-postgres@sha256:83aa35133ffe747636050bc4ee14d49c9893f3f67e0de5d595ea021345f46b6f
+    image: ghcr.io/zaxmnb0925-crypto/marketingos-postgres:p5-r1-a3a891d-convergence-r3@sha256:ad8ac8367939421bcb94ccd45a6c43d73b15fb139760492e1f92efb19d8ce1fc
     pull_policy: never
     restart: unless-stopped
     environment:
@@ -23,7 +23,7 @@ services:
       - marketingos_internal
 
   redis:
-    image: docker.io/library/redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    image: docker.io/library/redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     restart: unless-stopped
     command:
       [
@@ -42,7 +42,7 @@ services:
       - marketingos_internal
 
   backend:
-    image: marketingos-backend@sha256:5d5bb6f76d1ee159e38321f48c43aab9bb21b17752563a5d00a6c02dc61ff6c5
+    image: ghcr.io/zaxmnb0925-crypto/marketingos-backend:p5-r1-a3a891d-convergence-r3@sha256:79d225ffaa38f1495ec72709994116db1c0541fca8a09b2f479687b08674865e
     pull_policy: never
     # v0.13H defense-in-depth
     read_only: true

@@ -9,19 +9,19 @@ POSTGRES_DOCKERFILE = (
 ).read_text(encoding="utf-8")
 
 BACKEND = (
-    "marketingos-backend@sha256:"
-    "5d5bb6f76d1ee159e38321f48c43aab9bb21b17752563a5d00a6c02dc61ff6c5"
+    "ghcr.io/zaxmnb0925-crypto/marketingos-backend:p5-r1-a3a891d-convergence-r3@sha256:"
+    "79d225ffaa38f1495ec72709994116db1c0541fca8a09b2f479687b08674865e"
 )
 FRONTEND = (
-    "marketingos-frontend@sha256:"
-    "8c05022f639be8b799dedc5c62df411734b9e8545a689a17411149e3eee739ca"
+    "ghcr.io/zaxmnb0925-crypto/marketingos-frontend:p5-r1-a3a891d-brand-form-r3@sha256:"
+    "fb850f08a8097631c4548ec12558198bd3082a4d843778827773cb1738b289fa"
 )
 POSTGRES = (
-    "marketingos-postgres@sha256:"
-    "83aa35133ffe747636050bc4ee14d49c9893f3f67e0de5d595ea021345f46b6f"
+    "ghcr.io/zaxmnb0925-crypto/marketingos-postgres:p5-r1-a3a891d-convergence-r3@sha256:"
+    "ad8ac8367939421bcb94ccd45a6c43d73b15fb139760492e1f92efb19d8ce1fc"
 )
 REDIS = (
-    "docker.io/library/redis@sha256:"
+    "docker.io/library/redis:7-alpine@sha256:"
     "ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf"
 )
 
