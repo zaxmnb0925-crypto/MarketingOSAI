@@ -53,6 +53,8 @@ REDIS_TMPFS_ATTESTATION = {
 FUNCTIONAL_TEST_STATE_ROOT = Path("/tmp/marketingos-functional-test")
 POSTGRES_PASSWORD_FILENAME = "postgres-password"
 POSTGRES_PASSWORD_LENGTH = 43
+POSTGRES_DOCKER_ENV_FILENAME = "postgres-docker.env"
+POSTGRES_DOCKER_ENV_PREFIX = "POSTGRES_PASSWORD="
 
 
 def normalize_redis_tmpfs_configuration(value: Any) -> dict[str, object]:
@@ -91,7 +93,6 @@ class DockerResourceSpec:
     redis_db: int | None
     labels: Mapping[str, str]
     argv: tuple[str, ...]
-    required_secret_environment: tuple[str, ...]
 
     def sanitized_plan(self) -> dict[str, object]:
         return {
@@ -109,7 +110,6 @@ class DockerResourceSpec:
             "database_user": self.database_user,
             "redis_db": self.redis_db,
             "labels": dict(self.labels),
-            "required_secret_environment": list(self.required_secret_environment),
         }
 
 
@@ -258,6 +258,203 @@ def create_resource_directories(run_id: str, resource_type: str,
     return target
 
 
+def postgres_docker_env_file_path(
+        run_id: str, approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
+    """Return the only permitted transient Docker env-file path."""
+    return (
+        resource_temp_dir(run_id, "postgres", approved_root)
+        / POSTGRES_DOCKER_ENV_FILENAME
+    )
+
+
+def _validate_postgres_docker_env_parent(
+        path: Path, *, run_id: str,
+        approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
+    expected = postgres_docker_env_file_path(run_id, approved_root)
+
+    if not path.is_absolute() or path != expected:
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file path invalid"
+        )
+
+    parent = expected.parent
+    expected_uid, expected_gid = lifecycle_operator_identity()
+
+    if parent.is_symlink():
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file parent must not be a symlink"
+        )
+
+    try:
+        metadata = parent.stat(follow_symlinks=False)
+        canonical = parent.resolve(strict=True)
+        canonical_expected = resource_temp_dir(
+            run_id, "postgres", approved_root
+        ).resolve(strict=True)
+    except OSError as exc:
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file parent unavailable"
+        ) from exc
+
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or metadata.st_uid != expected_uid
+        or metadata.st_gid != expected_gid
+        or canonical != canonical_expected
+    ):
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file parent metadata invalid"
+        )
+
+    pgdata = parent / "data"
+
+    if path == pgdata or pgdata in path.parents:
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file must remain outside PGDATA"
+        )
+
+    return expected
+
+
+def write_postgres_docker_env_file(
+        path: Path, password: str, *, run_id: str,
+        approved_root: Path = APPROVED_TEMP_ROOT) -> None:
+    """Write one transient, operator-owned Docker env file securely."""
+    _validate_postgres_docker_env_parent(
+        path, run_id=run_id, approved_root=approved_root
+    )
+
+    if (
+        not isinstance(password, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{43}", password) is None
+    ):
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file secret invalid"
+        )
+
+    if path.exists() or path.is_symlink():
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file already exists"
+        )
+
+
+    payload = (
+        POSTGRES_DOCKER_ENV_PREFIX + password + "\n"
+    ).encode("ascii")
+
+
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        validate_operator_owned_metadata(path)
+
+        directory = os.open(
+            path.parent,
+            os.O_RDONLY | os.O_DIRECTORY,
+        )
+
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+        validate_operator_owned_metadata(path)
+
+        metadata = path.stat(follow_symlinks=False)
+
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size != len(payload)
+        ):
+            raise ResourceAttestationError(
+                "PostgreSQL Docker env-file metadata invalid"
+            )
+
+    except Exception:
+        cleanup_target = path
+        removed = False
+
+        try:
+            cleanup_target.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+        if removed:
+            try:
+                directory = os.open(
+                    path.parent,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                )
+            except OSError:
+                pass
+            else:
+                try:
+                    os.fsync(directory)
+                except OSError:
+                    pass
+                finally:
+                    os.close(directory)
+
+        raise
+
+
+def remove_postgres_docker_env_file(
+        path: Path, *, run_id: str,
+        approved_root: Path = APPROVED_TEMP_ROOT) -> None:
+    """Remove only the exact transient Docker env file and fsync parent."""
+    _validate_postgres_docker_env_parent(
+        path, run_id=run_id, approved_root=approved_root
+    )
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file cleanup unavailable"
+        ) from exc
+
+    expected_uid, expected_gid = lifecycle_operator_identity()
+
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_uid != expected_uid
+        or metadata.st_gid != expected_gid
+    ):
+        raise ResourceAttestationError(
+            "PostgreSQL Docker env-file cleanup metadata invalid"
+        )
+
+    path.unlink()
+
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY,
+    )
+
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def postgres_data_dir(run_id: str, *,
                       approved_root: Path = APPROVED_TEMP_ROOT) -> Path:
     """Return the only path permitted as the PostgreSQL PGDATA bind source."""
@@ -300,7 +497,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
         DOCKER_LABELS["run"]: run_id,
         DOCKER_LABELS["type"]: resource_type,
     }
-    prefix = list(docker_command("create", "--name", name, "--network", "bridge"))
+    prefix = list(docker_command("create", "--pull", "never", "--name", name, "--network", "bridge"))
     for key, value in labels.items():
         prefix += ["--label", f"{key}={value}"]
     if resource_type == "postgres":
@@ -312,10 +509,11 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
             "--mount", f"type=bind,src={pgdata_dir},dst=/var/lib/postgresql/data",
             "--env", f"POSTGRES_DB={database_name}",
             "--env", f"POSTGRES_USER={database_user}",
-            "--env", "POSTGRES_PASSWORD",
+            "--env-file", str(postgres_docker_env_file_path(
+                run_id, approved_root
+            )),
             image,
         ]
-        required = ("POSTGRES_PASSWORD",)
         redis_value = None
     elif resource_type == "redis":
         if not isinstance(redis_db, int) or isinstance(redis_db, bool) or not 1 <= redis_db <= 15:
@@ -327,7 +525,6 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
             "--tmpfs", REDIS_TMPFS_OPTION,
             image, "redis-server", "--save", "", "--appendonly", "no",
         ]
-        required = ()
         redis_value = redis_db
     else:
         raise ResourceAttestationError("resource type invalid")
@@ -337,7 +534,7 @@ def build_docker_spec(*, run_id: str, resource_type: str, image: str,
     return DockerResourceSpec(
         run_id, resource_type, image, digest, name, "127.0.0.1", port,
         internal_port, temp_dir, pgdata_dir, database_name, database_user, redis_value,
-        labels, tuple(prefix), required,
+        labels, tuple(prefix),
     )
 
 

@@ -24,9 +24,92 @@ __all__ = [
 from app.models.ai_credit import AICreditLedger, WorkspaceCreditAccount
 
 from app.models.subscription import (
+    PlanEntitlement,
+    SubscriptionStatus,
     SubscriptionPlan,
     WorkspaceSubscription,
 )
+from app.models.commercial import (
+    AdminSubscriptionAudit,
+    PaymentRecord,
+    PaymentStatus,
+    PlatformAdminMembership,
+    PlatformAdminRole,
+)
+
+__all__.extend([
+    "AICreditLedger",
+    "WorkspaceCreditAccount",
+    "PlanEntitlement",
+    "SubscriptionStatus",
+    "SubscriptionPlan",
+    "WorkspaceSubscription",
+    "AdminSubscriptionAudit",
+    "PaymentRecord",
+    "PaymentStatus",
+    "PlatformAdminMembership",
+    "PlatformAdminRole",
+])
+
+from app.models.ai_quality_policy_activation import (
+    AIQualityPolicyActivation,
+    AIQualityPolicyActivationAction,
+    AIQualityPolicyActivationAudit,
+    AIQualityPolicyActivationMode,
+    AIQualityPolicyActivationStatus,
+)
+__all__.extend([
+    "AIQualityPolicyActivation",
+    "AIQualityPolicyActivationAction",
+    "AIQualityPolicyActivationAudit",
+    "AIQualityPolicyActivationMode",
+    "AIQualityPolicyActivationStatus",
+])
+
+from app.models.ai_quality_policy_effect import (
+    AIQualityPolicyDegradationAction,
+    AIQualityPolicyDegradationRecommendation,
+    AIQualityPolicyDegradationStatus,
+    AIQualityPolicyEffectObservation,
+    AIQualityPolicyEffectState,
+)
+__all__.extend([
+    "AIQualityPolicyDegradationAction",
+    "AIQualityPolicyDegradationRecommendation",
+    "AIQualityPolicyDegradationStatus",
+    "AIQualityPolicyEffectObservation",
+    "AIQualityPolicyEffectState",
+])
+
+from app.models.ai_quality_policy_remediation import (
+    AIQualityPolicyRemediation,
+    AIQualityPolicyRemediationAction,
+    AIQualityPolicyRemediationAudit,
+    AIQualityPolicyRemediationStatus,
+)
+__all__.extend([
+    "AIQualityPolicyRemediation",
+    "AIQualityPolicyRemediationAction",
+    "AIQualityPolicyRemediationAudit",
+    "AIQualityPolicyRemediationStatus",
+])
+
+from app.models.ai_quality_policy_governance import (
+    AIQualityPolicyGovernanceCase,
+    AIQualityPolicyGovernanceCaseAction,
+    AIQualityPolicyGovernanceCaseAudit,
+    AIQualityPolicyGovernanceCaseStatus,
+    AIQualityPolicyGovernanceEvidenceItem,
+    AIQualityPolicyGovernanceEvidenceType,
+)
+__all__.extend([
+    "AIQualityPolicyGovernanceCase",
+    "AIQualityPolicyGovernanceCaseAction",
+    "AIQualityPolicyGovernanceCaseAudit",
+    "AIQualityPolicyGovernanceCaseStatus",
+    "AIQualityPolicyGovernanceEvidenceItem",
+    "AIQualityPolicyGovernanceEvidenceType",
+])
 
 from app.models.social_account import (
     SocialAccount,
@@ -44,4 +127,21 @@ from app.models.publication_reconciliation import (
 __all__.extend([
     "PublicationReconciliation",
     "PublicationReconciliationDecision",
+])
+
+from app.models.keyword_intelligence import KeywordTrendSignal
+__all__.append("KeywordTrendSignal")
+
+from app.models.ai_answer_feedback import AIAnswerFeedback, AnswerFeedbackReason
+__all__.extend(["AIAnswerFeedback", "AnswerFeedbackReason"])
+
+from app.models.ai_quality_policy import (
+    AIQualityPolicyDecisionAudit,
+    AIQualityPolicyRecommendation,
+    AIQualityPolicyStatus,
+)
+__all__.extend([
+    "AIQualityPolicyDecisionAudit",
+    "AIQualityPolicyRecommendation",
+    "AIQualityPolicyStatus",
 ])

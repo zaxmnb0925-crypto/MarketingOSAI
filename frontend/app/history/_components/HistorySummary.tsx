@@ -7,7 +7,6 @@ type HistorySummaryProps = {
   completedCount: number;
   failedCount: number;
   pendingCount: number;
-  totalTokens: number;
 };
 
 export function HistorySummary({
@@ -15,7 +14,6 @@ export function HistorySummary({
   completedCount,
   failedCount,
   pendingCount,
-  totalTokens,
 }: HistorySummaryProps) {
   return (
 <section className="history-summary-grid">
@@ -55,16 +53,6 @@ export function HistorySummary({
             </strong>
           </article>
 
-          <article>
-            <span>
-              Token
-            </span>
-            <strong>
-              {totalTokens.toLocaleString(
-                "zh-TW",
-              )}
-            </strong>
-          </article>
         </section>
   );
 }

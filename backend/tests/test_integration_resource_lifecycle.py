@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import _integration_resource_lifecycle as lifecycle
+
 from _integration_resource_attestation import (
     ResourceAttestationError, load_sentinel, validate_runtime_observation,
 )
@@ -84,14 +86,29 @@ def test_malformed_digest_is_rejected():
 
 def test_postgres_spec_is_loopback_digest_pinned_and_secret_safe(tmp_path):
     value = spec(tmp_path)
+    assert value.argv[4:6] == ("--pull", "never")
+    assert value.argv.count("--pull") == 1
     assert "127.0.0.1:15432:5432" in value.argv
-    assert "POSTGRES_PASSWORD" in value.argv
+    assert "--env-file" in value.argv
+    env_file_index = value.argv.index("--env-file")
+    assert value.argv[env_file_index + 1] == str(
+        value.temp_dir / "postgres-docker.env"
+    )
+    assert value.argv.count("--env-file") == 1
+    assert "POSTGRES_PASSWORD" not in value.argv
+    assert not any(
+        item.startswith("POSTGRES_PASSWORD=")
+        for item in value.argv
+        if isinstance(item, str)
+    )
     assert not any("password=" in item.lower() for item in value.argv)
     assert value.image == PG_IMAGE and value.database_name.startswith("marketingos_test_r22_")
 
 
 def test_redis_spec_disables_persistence_and_uses_nonzero_db(tmp_path):
     value = spec(tmp_path, "redis")
+    assert value.argv[4:6] == ("--pull", "never")
+    assert value.argv.count("--pull") == 1
     assert value.redis_db == 15
     assert ("--tmpfs", "/data:rw,size=67108864,mode=0700") == value.argv[
         value.argv.index("--tmpfs"):value.argv.index("--tmpfs") + 2
@@ -303,7 +320,7 @@ def test_migration_requires_attestation_environment_and_exact_head(tmp_path, mon
     command = authorize_migration(sentinel_path=sentinel, observation_path=observed,
                                   run_id=RUN_ID, runtime_password="runtime-only",
                                   approved_root=root)
-    assert command[-1] == "7c91e2f4b6a8" and "runtime-only" not in command
+    assert command[-1] == "4a7d9c2e6f10" and "runtime-only" not in command
 
 
 def test_migration_without_required_environment_is_rejected(tmp_path, monkeypatch):
@@ -414,7 +431,11 @@ def test_metadata_and_atomic_temporary_files_remain_outside_pgdata(tmp_path):
 
 def test_pgdata_empty_gate_precedes_docker_create_in_source():
     source = Path(__file__).with_name("_integration_execute_flows.py").read_text()
-    assert source.index("require_empty_postgres_data_dir(spec)") < source.index("executor.run(spec.argv")
+    assert source.index(
+        "require_empty_postgres_data_dir(spec)"
+    ) < source.index(
+        "created = executor.run("
+    )
 
 
 def test_operator_sentinel_contract_is_privileged_metadata_only():
@@ -423,3 +444,354 @@ def test_operator_sentinel_contract_is_privileged_metadata_only():
     operator = policy.split("Operator sentinel metadata contract", 1)[1]
     assert "chmod 755" not in operator and "chmod 777" not in operator
     assert "chown cbemsadmin" not in operator and "cat sentinel" not in operator
+
+# R22 COMMIT16 PHASE3C — TRANSIENT POSTGRES ENV-FILE SECURITY
+
+PHASE3C_SECRET = "T" * 43
+
+
+def _phase3c_transport_setup(tmp_path):
+    root = tmp_path / "approved"
+    create_resource_directories(
+        RUN_ID,
+        "postgres",
+        root,
+    )
+    value = spec(tmp_path)
+    transport = lifecycle.postgres_docker_env_file_path(
+        RUN_ID,
+        root,
+    )
+    return root, value, transport
+
+
+def test_postgres_docker_env_file_exact_path_mode_owner_and_content(tmp_path):
+    root, value, transport = _phase3c_transport_setup(tmp_path)
+
+    assert transport == value.temp_dir / "postgres-docker.env"
+    assert transport.parent == value.temp_dir
+    assert value.pgdata_dir not in transport.parents
+
+    lifecycle.write_postgres_docker_env_file(
+        transport,
+        PHASE3C_SECRET,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    metadata = transport.stat(follow_symlinks=False)
+    expected_uid, expected_gid = lifecycle.lifecycle_operator_identity()
+
+    assert transport.is_file()
+    assert metadata.st_mode & 0o777 == 0o600
+    assert metadata.st_uid == expected_uid
+    assert metadata.st_gid == expected_gid
+    assert transport.read_bytes() == (
+        b"POSTGRES_PASSWORD="
+        + PHASE3C_SECRET.encode("ascii")
+        + bytes((10,))
+    )
+
+    lifecycle.remove_postgres_docker_env_file(
+        transport,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    assert not transport.exists()
+
+
+def test_postgres_docker_env_file_existing_collision_fails_closed(tmp_path):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    transport.write_text(
+        "preexisting-nonsecret",
+        encoding="ascii",
+    )
+    transport.chmod(0o600)
+
+    with pytest.raises(
+        ResourceAttestationError,
+        match="already exists",
+    ):
+        lifecycle.write_postgres_docker_env_file(
+            transport,
+            PHASE3C_SECRET,
+            run_id=RUN_ID,
+            approved_root=root,
+        )
+
+    assert transport.read_text(
+        encoding="ascii"
+    ) == "preexisting-nonsecret"
+
+
+def test_postgres_docker_env_file_symlink_fails_closed(tmp_path):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    outside = tmp_path / "outside-env"
+    outside.write_text(
+        "outside-nonsecret",
+        encoding="ascii",
+    )
+    outside.chmod(0o600)
+
+    transport.symlink_to(outside)
+
+    with pytest.raises(ResourceAttestationError):
+        lifecycle.write_postgres_docker_env_file(
+            transport,
+            PHASE3C_SECRET,
+            run_id=RUN_ID,
+            approved_root=root,
+        )
+
+    assert outside.read_text(
+        encoding="ascii"
+    ) == "outside-nonsecret"
+
+
+def test_postgres_docker_env_file_wrong_path_fails_closed(tmp_path):
+    root, value, _transport = _phase3c_transport_setup(tmp_path)
+
+    wrong = value.temp_dir / "unexpected.env"
+
+    with pytest.raises(
+        ResourceAttestationError,
+        match="path invalid",
+    ):
+        lifecycle.write_postgres_docker_env_file(
+            wrong,
+            PHASE3C_SECRET,
+            run_id=RUN_ID,
+            approved_root=root,
+        )
+
+    assert not wrong.exists()
+
+
+def test_postgres_docker_env_file_writer_uses_exclusive_nofollow(
+        tmp_path, monkeypatch):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    real_open = lifecycle.os.open
+    creation_flags = []
+
+    def tracked_open(value, flags, *args, **kwargs):
+        if args and args[0] == 0o600:
+            creation_flags.append(flags)
+
+        return real_open(
+            value,
+            flags,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        lifecycle.os,
+        "open",
+        tracked_open,
+    )
+
+    lifecycle.write_postgres_docker_env_file(
+        transport,
+        PHASE3C_SECRET,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    assert len(creation_flags) == 1
+    assert creation_flags[0] & lifecycle.os.O_EXCL
+
+    if hasattr(lifecycle.os, "O_NOFOLLOW"):
+        assert creation_flags[0] & lifecycle.os.O_NOFOLLOW
+
+    lifecycle.remove_postgres_docker_env_file(
+        transport,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+
+def test_postgres_docker_env_file_late_failure_removes_secret_residue(
+        tmp_path, monkeypatch):
+    root, value, transport = _phase3c_transport_setup(tmp_path)
+
+    real_open = lifecycle.os.open
+
+    def fail_parent_directory_open(raw_path, flags, *args, **kwargs):
+        candidate = Path(raw_path)
+
+        if (
+            candidate == transport.parent
+            and not args
+            and flags
+            == (
+                lifecycle.os.O_RDONLY
+                | lifecycle.os.O_DIRECTORY
+            )
+        ):
+            raise OSError(
+                "synthetic-parent-fsync-open-failure"
+            )
+
+        return real_open(
+            raw_path,
+            flags,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        lifecycle.os,
+        "open",
+        fail_parent_directory_open,
+    )
+
+    with pytest.raises(
+        OSError,
+        match="synthetic-parent-fsync-open-failure",
+    ):
+        lifecycle.write_postgres_docker_env_file(
+            transport,
+            PHASE3C_SECRET,
+            run_id=RUN_ID,
+            approved_root=root,
+        )
+
+    assert not transport.exists(), (
+        "RED_EXPECTED: a writer failure after final publication "
+        "must not leave the transient PostgreSQL secret file"
+    )
+
+    assert not any(
+        candidate.name.startswith(
+            ".postgres-docker.env."
+        )
+        for candidate in value.temp_dir.iterdir()
+    )
+
+# R22 COMMIT16 PHASE5A — DIRECT FINAL POSTGRES ENV-FILE SECURITY
+
+
+def test_postgres_docker_env_writer_uses_no_second_csprng(
+        tmp_path, monkeypatch):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    def forbidden_token_hex(*_args, **_kwargs):
+        raise AssertionError(
+            "RED_EXPECTED: transient env-file writer "
+            "must not use a second CSPRNG"
+        )
+
+    monkeypatch.setattr(
+        lifecycle.secrets,
+        "token_hex",
+        forbidden_token_hex,
+    )
+
+    lifecycle.write_postgres_docker_env_file(
+        transport,
+        PHASE3C_SECRET,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    assert transport.is_file()
+
+    lifecycle.remove_postgres_docker_env_file(
+        transport,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+
+def test_postgres_docker_env_writer_opens_exact_final_path_exclusively(
+        tmp_path, monkeypatch):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    real_open = lifecycle.os.open
+    secure_create_calls = []
+
+    def tracked_open(raw_path, flags, *args, **kwargs):
+        if args and args[0] == 0o600:
+            secure_create_calls.append(
+                (
+                    Path(raw_path),
+                    flags,
+                )
+            )
+
+        return real_open(
+            raw_path,
+            flags,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        lifecycle.os,
+        "open",
+        tracked_open,
+    )
+
+    lifecycle.write_postgres_docker_env_file(
+        transport,
+        PHASE3C_SECRET,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    assert len(secure_create_calls) == 1
+
+    opened_path, flags = secure_create_calls[0]
+
+    assert opened_path == transport, (
+        "RED_EXPECTED: O_EXCL/O_NOFOLLOW create must target "
+        "the exact final postgres-docker.env path"
+    )
+
+    assert flags & lifecycle.os.O_CREAT
+    assert flags & lifecycle.os.O_EXCL
+
+    if hasattr(lifecycle.os, "O_NOFOLLOW"):
+        assert flags & lifecycle.os.O_NOFOLLOW
+
+    lifecycle.remove_postgres_docker_env_file(
+        transport,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+
+def test_postgres_docker_env_writer_never_uses_replace(
+        tmp_path, monkeypatch):
+    root, _value, transport = _phase3c_transport_setup(tmp_path)
+
+    def forbidden_replace(*_args, **_kwargs):
+        raise RuntimeError(
+            "RED_EXPECTED: transient secret publication "
+            "must not use os.replace"
+        )
+
+    monkeypatch.setattr(
+        lifecycle.os,
+        "replace",
+        forbidden_replace,
+    )
+
+    lifecycle.write_postgres_docker_env_file(
+        transport,
+        PHASE3C_SECRET,
+        run_id=RUN_ID,
+        approved_root=root,
+    )
+
+    assert transport.is_file()
+
+    lifecycle.remove_postgres_docker_env_file(
+        transport,
+        run_id=RUN_ID,
+        approved_root=root,
+    )

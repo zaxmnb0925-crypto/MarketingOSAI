@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { useRouter } from "next/navigation";
+import { sessionFetch } from "@/lib/session-fetch";
 
 import type {
   MeResponse,
@@ -60,7 +61,6 @@ export default function HistoryPage() {
     completedCount,
     failedCount,
     pendingCount,
-    totalTokens,
   } = useContentHistory();
 
   
@@ -92,7 +92,7 @@ export default function HistoryPage() {
 
     try {
       const response =
-        await fetch(
+        await sessionFetch(
           `/api/workspaces/${workspaceId}/brands/${brandId}/content`,
           {
             cache: "no-store",
@@ -130,7 +130,7 @@ export default function HistoryPage() {
     async function boot() {
       try {
         const meResponse =
-          await fetch(
+          await sessionFetch(
             "/api/auth/me",
             {
               cache: "no-store",
@@ -163,7 +163,7 @@ export default function HistoryPage() {
         );
 
         const brandResponse =
-          await fetch(
+          await sessionFetch(
             `/api/workspaces/${currentWorkspace.id}/brands`,
             {
               cache: "no-store",
@@ -329,7 +329,7 @@ export default function HistoryPage() {
 
             <p>
               查看每個品牌的 AI
-              文案、Token 與成本紀錄。
+              文案與任務狀態。
             </p>
           </div>
         </header>
@@ -349,7 +349,6 @@ export default function HistoryPage() {
           completedCount={completedCount}
           failedCount={failedCount}
           pendingCount={pendingCount}
-          totalTokens={totalTokens}
         />
 
         {error ? (

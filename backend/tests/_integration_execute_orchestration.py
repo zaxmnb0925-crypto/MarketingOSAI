@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from urllib.parse import unquote, urlsplit
 import time
 import sys
 from typing import Mapping, Protocol, Sequence
@@ -41,6 +42,8 @@ class FailureClass(str, Enum):
     CREATE_FAILED = "CREATE_FAILED"
     START_FAILED = "START_FAILED"
     DOCKER_OBSERVATION_FAILED = "DOCKER_OBSERVATION_FAILED"
+    SUBPROCESS_EXECUTION_FAILED = "SUBPROCESS_EXECUTION_FAILED"
+    COMMAND_RETURN_CODE_REJECTED = "COMMAND_RETURN_CODE_REJECTED"
     LISTENER_ATTESTATION_FAILED = "LISTENER_ATTESTATION_FAILED"
     RESOURCE_IDENTITY_MISMATCH = "RESOURCE_IDENTITY_MISMATCH"
     SENTINEL_WRITE_FAILED = "SENTINEL_WRITE_FAILED"
@@ -59,11 +62,18 @@ class FailureClass(str, Enum):
 class OrchestrationError(RuntimeError):
     def __init__(self, category: FailureClass, *, resource_preserved: bool = True,
                  ownership_boundary: str | None = None,
-                 original_category: FailureClass | None = None):
+                 original_category: FailureClass | None = None,
+                 returncode: int | None = None,
+                 diagnostic: Mapping[str, str] | None = None):
         self.category, self.resource_preserved = category, resource_preserved
         self.ownership_boundary = ownership_boundary
         self.original_category = original_category
-        super().__init__(category.value)
+        self.returncode = returncode
+        self.diagnostic = dict(diagnostic) if diagnostic is not None else None
+        message = category.value
+        if returncode is not None:
+            message += f": returncode={returncode}"
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -71,6 +81,130 @@ class CommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+_SENSITIVE_ENV_NAME_PARTS = (
+    "PASSWORD",
+    "SECRET",
+    "TOKEN",
+    "AUTHORIZATION",
+    "API_KEY",
+)
+
+_URL_ENV_NAMES = frozenset({
+    "DATABASE_URL",
+    "REDIS_URL",
+})
+
+_URI_CREDENTIAL_PATTERN = re.compile(
+    r"([A-Za-z][A-Za-z0-9+.-]*://[^:\s/@]+):[^@\s/]+@"
+)
+
+_BEARER_PATTERN = re.compile(
+    r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"
+)
+
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b("
+    r"password|passwd|secret|token|authorization|"
+    r"api[_-]?key|database_url|redis_url"
+    r")(\s*[:=]\s*)([^\s,;]+)"
+)
+
+_CONTROL_CHARACTER_PATTERN = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+)
+
+
+def _sensitive_environment_values(
+        env: Mapping[str, str] | None) -> tuple[str, ...]:
+    values: set[str] = set()
+
+    for name, value in (env or {}).items():
+        if not isinstance(value, str) or not value:
+            continue
+
+        upper = name.upper()
+
+        if upper in _URL_ENV_NAMES:
+            try:
+                password = urlsplit(value).password
+            except ValueError:
+                password = None
+
+            if password:
+                values.add(password)
+                values.add(unquote(password))
+
+            continue
+
+        if any(
+            part in upper
+            for part in _SENSITIVE_ENV_NAME_PARTS
+        ):
+            values.add(value)
+
+    return tuple(
+        sorted(
+            (value for value in values if value),
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _sanitize_subprocess_output(
+        value: str,
+        env: Mapping[str, str] | None,
+) -> str:
+    sanitized = _URI_CREDENTIAL_PATTERN.sub(
+        r"\1:<redacted>@",
+        value,
+    )
+
+    sanitized = _BEARER_PATTERN.sub(
+        "Bearer <redacted>",
+        sanitized,
+    )
+
+    for secret in _sensitive_environment_values(env):
+        sanitized = sanitized.replace(
+            secret,
+            "<redacted>",
+        )
+
+    sanitized = _SECRET_ASSIGNMENT_PATTERN.sub(
+        lambda match: (
+            match.group(1)
+            + match.group(2)
+            + "<redacted>"
+        ),
+        sanitized,
+    )
+
+    sanitized = _CONTROL_CHARACTER_PATTERN.sub(
+        "<control>",
+        sanitized,
+    )
+
+    return sanitized[:MAX_CAPTURE_BYTES]
+
+
+def safe_subprocess_diagnostic(
+        stdout: str,
+        stderr: str,
+        env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    return {
+        "stdout": _sanitize_subprocess_output(
+            stdout,
+            env,
+        ),
+        "stderr": _sanitize_subprocess_output(
+            stderr,
+            env,
+        ),
+    }
 
 
 class CommandExecutor(Protocol):
@@ -98,12 +232,22 @@ class SubprocessCommandExecutor:
                 text=True, capture_output=True, timeout=timeout, check=False,
             )
         except (OSError, subprocess.SubprocessError):
-            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED) from None
+            raise OrchestrationError(
+                FailureClass.SUBPROCESS_EXECUTION_FAILED
+            ) from None
         result = CommandResult(completed.returncode,
                                completed.stdout[:MAX_CAPTURE_BYTES],
                                completed.stderr[:MAX_CAPTURE_BYTES])
         if result.returncode not in allowed_returncodes:
-            raise OrchestrationError(FailureClass.DOCKER_OBSERVATION_FAILED)
+            raise OrchestrationError(
+                FailureClass.COMMAND_RETURN_CODE_REJECTED,
+                returncode=result.returncode,
+                diagnostic=safe_subprocess_diagnostic(
+                    completed.stdout,
+                    completed.stderr,
+                    env,
+                ),
+            )
         return result
 
 
@@ -160,11 +304,37 @@ def collect_inventory(executor: CommandExecutor) -> tuple[InventoryItem, ...]:
 
 
 def reject_inventory_collision(items: Sequence[InventoryItem], spec: DockerResourceSpec) -> None:
+    if spec.resource_type not in {"postgres", "redis"}:
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+    same_run = []
     for item in items:
-        if not isinstance(item.name, str) or not isinstance(item.run_id, str):
+        if (not isinstance(item.name, str) or
+                not isinstance(item.run_id, str) or
+                not isinstance(item.test_resource, str) or
+                not isinstance(item.resource_type, str)):
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
-        if item.name == spec.container_name or item.run_id == spec.run_id:
+
+        if item.name == spec.container_name:
             raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+        if item.run_id == spec.run_id:
+            same_run.append(item)
+
+    if not same_run:
+        return
+
+    if len(same_run) != 1:
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
+
+    sibling = same_run[0]
+    opposite_type = "redis" if spec.resource_type == "postgres" else "postgres"
+    expected_sibling_name = f"marketingos-{spec.run_id}-{opposite_type}"
+
+    if (sibling.test_resource != "true" or
+            sibling.resource_type != opposite_type or
+            sibling.name != expected_sibling_name):
+        raise OrchestrationError(FailureClass.INVENTORY_COLLISION)
 
 
 def _inspect_argv(container_id: str) -> tuple[str, ...]:
@@ -174,7 +344,7 @@ def _inspect_argv(container_id: str) -> tuple[str, ...]:
               "{{json .Config.Labels}}", "{{json .State.Running}}",
               "{{json .State.StartedAt}}", "{{json .HostConfig.NetworkMode}}",
               "{{json .NetworkSettings.Ports}}", "{{json .Mounts}}",
-              "{{json .HostConfig.Tmpfs}}", "{{json .Config.Volumes}}")
+              '{{if (index .HostConfig "Tmpfs")}}{{json (index .HostConfig "Tmpfs")}}{{else}}{}{{end}}', "{{json .Config.Volumes}}")
     return docker_command("inspect", "--type", "container", "--format",
                           "\n".join(fields), container_id)
 

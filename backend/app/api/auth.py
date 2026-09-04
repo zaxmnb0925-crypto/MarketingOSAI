@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -22,6 +23,9 @@ from app.models.membership import (
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.workspace import Workspace
+from app.services.subscriptions import (
+    provision_free_subscription,
+)
 from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
@@ -32,6 +36,7 @@ from app.schemas.auth import (
     UserResponse,
     WorkspaceResponse,
 )
+from app.core.rate_limit import enforce_rate_limit, normalized_login_identifier_hash
 
 
 router = APIRouter(
@@ -60,6 +65,8 @@ def slugify(value: str) -> str:
 async def issue_tokens(
     db: AsyncSession,
     user: User,
+    *,
+    commit: bool = True,
 ) -> TokenResponse:
 
     access_token, expires_in = create_access_token(
@@ -78,7 +85,10 @@ async def issue_tokens(
         )
     )
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
 
     return TokenResponse(
         access_token=access_token,
@@ -96,6 +106,17 @@ async def register(
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+
+    await enforce_rate_limit(
+        scope="register",
+        identifiers=(
+            normalized_login_identifier_hash(
+                payload.email
+            ),
+        ),
+        limit=5,
+        window_seconds=3600,
+    )
 
     email = normalize_email(
         str(payload.email)
@@ -133,26 +154,40 @@ async def register(
         workspace,
     ])
 
-    await db.flush()
-
-    membership = Membership(
-        user_id=user.id,
-        workspace_id=workspace.id,
-        role=MembershipRole.owner,
-    )
-
-    db.add(membership)
-
     try:
+        await db.flush()
+
+        await provision_free_subscription(
+            db,
+            workspace.id,
+        )
+
+        db.add(
+            Membership(
+                user_id=user.id,
+                workspace_id=workspace.id,
+                role=MembershipRole.owner,
+            )
+        )
+
+        tokens = await issue_tokens(
+            db,
+            user,
+            commit=False,
+        )
+
         await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        ) from exc
     except Exception:
         await db.rollback()
         raise
 
-    return await issue_tokens(
-        db,
-        user,
-    )
+    return tokens
 
 
 @router.post(
@@ -164,6 +199,16 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
 
+    await enforce_rate_limit(
+        scope="login",
+        identifiers=(
+            normalized_login_identifier_hash(
+                payload.email
+            ),
+        ),
+        limit=10,
+        window_seconds=600,
+    )
     email = normalize_email(
         str(payload.email)
     )
@@ -217,7 +262,7 @@ async def refresh(
     result = await db.execute(
         select(RefreshToken).where(
             RefreshToken.token_hash == digest
-        )
+        ).with_for_update()
     )
 
     stored = result.scalar_one_or_none()

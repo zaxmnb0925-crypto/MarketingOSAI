@@ -50,6 +50,7 @@ from app.services.oauth_state import (
     consume_and_verify_oauth_state_v2,
     create_oauth_state_v2,
 )
+from app.core.rate_limit import enforce_rate_limit
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,14 @@ async def connect_oauth_provider(
     ),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_rate_limit(
+        scope="oauth_start",
+        identifiers=(
+            str(current_user.id),
+        ),
+        limit=10,
+        window_seconds=600,
+    )
     await require_workspace_write(
         db,
         current_user,

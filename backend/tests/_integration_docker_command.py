@@ -1,6 +1,7 @@
 """Exact, Docker-only privilege boundary for disposable integration resources."""
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Sequence
 import re
 
@@ -38,7 +39,10 @@ def _valid_docker_arguments(subcommand: str, arguments: tuple[object, ...]) -> b
                 and isinstance(arguments[4], str) and cid.fullmatch(arguments[4]) is not None)
     if subcommand != "create" or len(arguments) < 12:
         return False
-    allowed_options = {"--name", "--network", "--label", "--publish", "--mount", "--env", "--tmpfs"}
+    allowed_options = {
+        "--pull", "--name", "--network", "--label", "--publish", "--mount",
+        "--env", "--env-file", "--tmpfs",
+    }
     index = 0
     values: dict[str, list[str]] = {}
     while index < len(arguments) and isinstance(arguments[index], str) and arguments[index].startswith("--"):
@@ -60,6 +64,7 @@ def _valid_docker_arguments(subcommand: str, arguments: tuple[object, ...]) -> b
     labels = values.get("--label", [])
     publishes = values.get("--publish", [])
     if (len(names) != 1 or re.fullmatch(r"marketingos-r22-[0-9a-f]{16}-(?:postgres|redis)", names[0]) is None
+            or values.get("--pull") != ["never"]
             or values.get("--network") != ["bridge"]
             or len(publishes) != 1
             or re.fullmatch(r"127\.0\.0\.1:[0-9]{4,5}:(?:5432|6379)", publishes[0]) is None
@@ -70,16 +75,62 @@ def _valid_docker_arguments(subcommand: str, arguments: tuple[object, ...]) -> b
             }):
         return False
     if remainder == ():
-        mounts, environment = values.get("--mount", []), values.get("--env", [])
-        return (len(mounts) == 1
-                and re.fullmatch(r"type=bind,src=/tmp/[^,]+,dst=/var/lib/postgresql/data", mounts[0]) is not None
-                and len(environment) == 3
-                and {entry.split("=", 1)[0] for entry in environment} == {
-                    "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD",
-                } and "--tmpfs" not in values)
+        mounts = values.get("--mount", [])
+        environment = values.get("--env", [])
+        env_files = values.get("--env-file", [])
+
+        if len(mounts) != 1:
+            return False
+
+        mount_match = re.fullmatch(
+            r"type=bind,src=(/tmp/[^,]+),dst=/var/lib/postgresql/data",
+            mounts[0],
+        )
+
+        if mount_match is None:
+            return False
+
+        source = PurePosixPath(mount_match.group(1))
+
+        if (
+            not source.is_absolute()
+            or ".." in source.parts
+            or source.name != "data"
+            or source.parent.name != "postgres"
+        ):
+            return False
+
+        name_match = re.fullmatch(
+            r"marketingos-(r22-[0-9a-f]{16})-postgres",
+            names[0],
+        )
+
+        if name_match is None:
+            return False
+
+        run_id = name_match.group(1)
+
+        if source.parent.parent.name != run_id:
+            return False
+
+        expected_env_file = str(
+            source.parent / "postgres-docker.env"
+        )
+
+        return (
+            len(environment) == 2
+            and {
+                entry.split("=", 1)[0]
+                for entry in environment
+            } == {"POSTGRES_DB", "POSTGRES_USER"}
+            and env_files == [expected_env_file]
+            and "--tmpfs" not in values
+        )
     return (remainder == ("redis-server", "--save", "", "--appendonly", "no")
             and values.get("--tmpfs") == ["/data:rw,size=67108864,mode=0700"]
-            and "--mount" not in values and "--env" not in values)
+            and "--mount" not in values
+            and "--env" not in values
+            and "--env-file" not in values)
 
 
 def is_privileged_docker_command(argv: Sequence[object]) -> bool:

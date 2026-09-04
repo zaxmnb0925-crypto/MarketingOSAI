@@ -6,7 +6,11 @@ from pathlib import Path
 import sys
 
 from _integration_execute_flows import assert_same_run_resources
-from _integration_execute_orchestration import SubprocessCommandExecutor
+from _integration_execute_orchestration import (
+    OrchestrationError,
+    SubprocessCommandExecutor,
+    safe_subprocess_diagnostic,
+)
 from _integration_live_attestation import attest_live_resource
 from _integration_resource_attestation import (
     reconstruct_database_url, reconstruct_redis_url, safe_diagnostic,
@@ -15,10 +19,146 @@ from _integration_resource_lifecycle import sanitized_subprocess_environment
 from _test_environment_guard import validate_test_environment
 
 ALLOWLIST = {
+    "backend/tests/test_p4_ai_accounting_postgres_integration.py": False,
+    "backend/tests/test_p5_platform_admin_postgres_integration.py": False,
+    "backend/tests/test_p5_keyword_intelligence_postgres_integration.py": False,
     "backend/tests/test_publication_reconciliation_postgres_integration.py": False,
     "backend/tests/test_publication_publish_http_integration.py": True,
     "backend/tests/test_publication_publish_normal_mode_integration.py": True,
 }
+
+RECONCILIATION_TEST = (
+    "backend/tests/"
+    "test_publication_reconciliation_postgres_integration.py"
+)
+
+RECONCILIATION_SUCCESS_MARKERS = (
+    "Real PostgreSQL reconciliation service integration: FULL PASS",
+    "Provider/Meta execution invoked: NO",
+)
+
+
+def _pytest_command(relative: str) -> tuple[str, ...]:
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+    ]
+
+    if relative == RECONCILIATION_TEST:
+        command.append("-s")
+
+    command.extend([
+        "--disable-warnings",
+        "-p",
+        "_test_isolation_plugin",
+        "-p",
+        "_v013h_legacy_target_compat",
+        relative.removeprefix("backend/"),
+    ])
+
+    return tuple(command)
+
+
+def _emit_command_diagnostic(
+    error: OrchestrationError,
+    *,
+    child_env: dict[str, str],
+) -> None:
+    diagnostic = error.diagnostic
+
+    if not diagnostic:
+        return
+
+    safe = safe_subprocess_diagnostic(
+        diagnostic.get("stdout", ""),
+        diagnostic.get("stderr", ""),
+        child_env,
+    )
+
+    for stream in ("stdout", "stderr"):
+        value = safe[stream]
+
+        if not value:
+            continue
+
+        label = stream.upper()
+
+        print(
+            f"INTEGRATION_CHILD_{label}_BEGIN",
+            file=sys.stderr,
+        )
+
+        sys.stderr.write(value)
+
+        if not value.endswith("\n"):
+            sys.stderr.write("\n")
+
+        print(
+            f"INTEGRATION_CHILD_{label}_END",
+            file=sys.stderr,
+        )
+
+
+def _run_pytest(
+    executor,
+    *,
+    command: tuple[str, ...],
+    child_env: dict[str, str],
+    cwd: Path,
+    relative: str,
+) -> int:
+    reconciliation = (
+        relative == RECONCILIATION_TEST
+    )
+
+    allowed_returncodes = (
+        frozenset({5})
+        if reconciliation
+        else frozenset({0})
+    )
+
+    try:
+        result = executor.run(
+            command,
+            env=child_env,
+            cwd=cwd,
+            allowed_returncodes=allowed_returncodes,
+        )
+    except OrchestrationError as error:
+        _emit_command_diagnostic(
+            error,
+            child_env=child_env,
+        )
+        raise
+
+    expected_returncode = (
+        5
+        if reconciliation
+        else 0
+    )
+
+    if result.returncode != expected_returncode:
+        raise RuntimeError(
+            "integration entrypoint returned "
+            "unexpected pytest return code"
+        )
+
+    if reconciliation:
+        lines = result.stdout.splitlines()
+
+        if any(
+            lines.count(marker) != 1
+            for marker
+            in RECONCILIATION_SUCCESS_MARKERS
+        ):
+            raise RuntimeError(
+                "reconciliation semantic success markers "
+                "are missing or duplicated"
+            )
+
+    return 0
 
 
 def _required(name: str) -> str:
@@ -53,13 +193,17 @@ def main(argv: list[str]) -> int:
     child_env = sanitized_subprocess_environment({
         "ENVIRONMENT": "test", "MARKETINGOS_TEST_MODE": "integration",
         "MARKETINGOS_TEST_RESOURCE_SCOPE": "disposable", "TEST_RUN_ID": run_id,
-        "SECRET_KEY": "test-only-synthetic-secret",
+        "SECRET_KEY": "test-only-synthetic-secret-at-least-32-bytes",
         "OPENAI_API_KEY": "test-only-not-a-live-key",
         "OAUTH_TOKEN_ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         "API_DOCS_ENABLED": "false", "REAL_PUBLISH_ENABLED": "false",
         "META_PUBLISH_TRANSPORT_ENABLED": "false",
         "META_PUBLISH_CANARY_MODE_ENABLED": "true",
     })
+    child_env["PYTHONPATH"] = os.pathsep.join((
+        str(root / "backend"),
+        str(root / "backend" / "tests"),
+    ))
     child_env["DATABASE_URL"] = reconstruct_database_url(
         postgres, _required("POSTGRES_TEST_PASSWORD")
     )
@@ -90,10 +234,15 @@ def main(argv: list[str]) -> int:
         print("INTEGRATION_RESOURCE_ATTESTATION=PASS " + " ".join(
             f"{key}={value}" for key, value in fields.items()
         ))
-    command = [sys.executable, "-m", "pytest", "-q", "--disable-warnings",
-               "-p", "_test_isolation_plugin", "-p", "_v013h_legacy_target_compat",
-               relative.removeprefix("backend/")]
-    return executor.run(command, env=child_env, cwd=root / "backend").returncode
+    command = _pytest_command(relative)
+
+    return _run_pytest(
+        executor,
+        command=command,
+        child_env=child_env,
+        cwd=root / "backend",
+        relative=relative,
+    )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,9 @@ if [ "$#" -ne 1 ]; then
 fi
 
 case "$1" in
+    backend/tests/test_p4_ai_accounting_postgres_integration.py) NEED_REDIS=false ;;
+    backend/tests/test_p5_platform_admin_postgres_integration.py) NEED_REDIS=false ;;
+    backend/tests/test_p5_keyword_intelligence_postgres_integration.py) NEED_REDIS=false ;;
     backend/tests/test_publication_reconciliation_postgres_integration.py) NEED_REDIS=false ;;
     backend/tests/test_publication_publish_http_integration.py) NEED_REDIS=true ;;
     backend/tests/test_publication_publish_normal_mode_integration.py) NEED_REDIS=true ;;
@@ -31,7 +34,7 @@ export ENVIRONMENT=test
 export MARKETINGOS_TEST_MODE=integration
 export MARKETINGOS_TEST_RESOURCE_SCOPE=disposable
 export TEST_RUN_ID="$RESOURCE_RUN_ID"
-export SECRET_KEY="test-only-synthetic-secret"
+export SECRET_KEY="test-only-synthetic-secret-at-least-32-bytes"
 export OPENAI_API_KEY="test-only-not-a-live-key"
 export OAUTH_TOKEN_ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 export API_DOCS_ENABLED=false

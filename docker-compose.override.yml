@@ -1,4 +1,4 @@
 services:
   frontend:
-    image: marketingos-frontend:v015-beta-rc1
+    image: ghcr.io/zaxmnb0925-crypto/marketingos-frontend:p5-r1-a3a891d-brand-form-r3@sha256:fb850f08a8097631c4548ec12558198bd3082a4d843778827773cb1738b289fa
     pull_policy: never

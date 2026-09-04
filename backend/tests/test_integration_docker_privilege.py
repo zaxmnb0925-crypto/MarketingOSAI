@@ -20,7 +20,7 @@ from _integration_execute_orchestration import (
 
 @pytest.mark.parametrize("command", [
     docker_command("ps", "-a", "--no-trunc", "--format", "{{.ID}}"),
-    docker_command("create", "--name", "marketingos-r22-0123456789abcdef-redis", "--network", "bridge",
+    docker_command("create", "--pull", "never", "--name", "marketingos-r22-0123456789abcdef-redis", "--network", "bridge",
                    "--label", "com.marketingos.test-resource=true",
                    "--label", "com.marketingos.test-run-id=r22-0123456789abcdef",
                    "--label", "com.marketingos.test-resource-type=redis",

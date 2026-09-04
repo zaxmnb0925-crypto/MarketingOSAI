@@ -1,5 +1,8 @@
+import base64
+import binascii
 from uuid import UUID
 
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,9 +45,67 @@ class Settings(BaseSettings):
     # with API_DOCS_ENABLED=true.
     api_docs_enabled: bool = False
 
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 bytes")
+        return value
+
+    @field_validator("oauth_token_encryption_key")
+    @classmethod
+    def validate_oauth_encryption_key(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(
+                value.encode("ascii"),
+                altchars=b"-_",
+                validate=True,
+            )
+        except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+            raise ValueError(
+                "OAUTH_TOKEN_ENCRYPTION_KEY must be a valid Fernet key"
+            ) from exc
+        if len(decoded) != 32:
+            raise ValueError(
+                "OAUTH_TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def reject_production_placeholders(self):
+        if self.environment.strip().casefold() != "production":
+            return self
+
+        markers = (
+            "replace",
+            "changeme",
+            "example",
+            "test-only",
+            "not-a-live",
+        )
+        secret = self.secret_key.casefold()
+        secret_bytes = self.secret_key.encode("utf-8")
+        if len(secret_bytes) < 64 or len(set(secret_bytes)) < 16 or any(
+            marker in secret for marker in markers
+        ):
+            raise ValueError(
+                "Production SECRET_KEY must be at least 64 bytes and not weak or a placeholder"
+            )
+
+        encryption_key = self.oauth_token_encryption_key.casefold()
+        decoded = base64.urlsafe_b64decode(
+            self.oauth_token_encryption_key.encode("ascii")
+        )
+        if any(marker in encryption_key for marker in markers) or len(set(decoded)) < 2:
+            raise ValueError(
+                "Production OAUTH_TOKEN_ENCRYPTION_KEY must not be a placeholder"
+            )
+        return self
+
     model_config = SettingsConfigDict(
         case_sensitive=False,
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 

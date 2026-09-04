@@ -17,7 +17,8 @@ from _integration_execute_flows import (
 )
 from _integration_execute_orchestration import (
     CommandResult, FailureClass, InventoryItem, ListenerObservation,
-    OrchestrationError, collect_inventory, observe_lifecycle_stability, observe_listener,
+    OrchestrationError, SubprocessCommandExecutor, collect_inventory,
+    observe_lifecycle_stability, observe_listener,
     parse_restricted_docker_observation,
     reject_inventory_collision, require_loopback_listener, require_port_free,
     validate_provisional_observation,
@@ -28,6 +29,7 @@ from _integration_resource_lifecycle import (
     postgres_password_file_path, read_postgres_password_file, sentinel_payload,
     validate_image_reference, write_secure_json,
 )
+import subprocess
 
 RUN_ID = "r22-0123456789abcdef"
 PG_IMAGE = "docker.io/library/postgres@sha256:" + "a" * 64
@@ -140,6 +142,433 @@ def test_raw_environment_cannot_be_added_to_restricted_output(tmp_path):
 def inventory_row(*, cid=CID, name="safe", test_resource="", run_id="",
                   resource_type=""):
     return "\t".join((cid, name, test_resource, run_id, resource_type))
+
+
+def test_executor_subprocess_exception_has_distinct_safe_failure(monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+
+    def fail_run(*_args, **_kwargs):
+        raise OSError(synthetic_secret)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fail_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "POSTGRES_TEST_PASSWORD": synthetic_secret,
+            },
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.SUBPROCESS_EXECUTION_FAILED
+    )
+    assert error.value.returncode is None
+
+    safe = str(error.value)
+
+    assert safe == "SUBPROCESS_EXECUTION_FAILED"
+    assert synthetic_secret not in safe
+    assert "POSTGRES_TEST_PASSWORD" not in safe
+    assert "DATABASE_URL" not in safe
+
+
+def test_executor_disallowed_returncode_exposes_integer_only(monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=(
+                "stdout-"
+                + synthetic_secret
+            ),
+            stderr=(
+                "stderr-"
+                + synthetic_url
+            ),
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+                "POSTGRES_TEST_PASSWORD": synthetic_secret,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.COMMAND_RETURN_CODE_REJECTED
+    )
+    assert error.value.returncode == 7
+
+    safe = str(error.value)
+
+    assert safe == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+    assert synthetic_secret not in safe
+    assert synthetic_url not in safe
+
+    assert "stdout-" not in safe
+    assert "stderr-" not in safe
+
+    assert "DATABASE_URL" not in safe
+    assert "POSTGRES_TEST_PASSWORD" not in safe
+
+
+def test_executor_disallowed_returncode_retains_sanitized_bounded_diagnostic(
+        monkeypatch):
+    synthetic_secret = "synthetic-secret-must-not-appear"
+
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    oversized = (
+        "A" * (256 * 1024 + 4096)
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=(
+                "stdout-secret="
+                + synthetic_secret
+                + "\n"
+                + "\x1b"
+                + oversized
+            ),
+            stderr=(
+                "database="
+                + synthetic_url
+                + "\n"
+                + "Authorization: Bearer synthetic-token-value"
+            ),
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+                "POSTGRES_TEST_PASSWORD":
+                    synthetic_secret,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.COMMAND_RETURN_CODE_REJECTED
+    )
+
+    assert error.value.returncode == 7
+
+    diagnostic = error.value.diagnostic
+
+    assert diagnostic is not None
+    assert set(diagnostic) == {"stdout", "stderr"}
+
+    combined = (
+        diagnostic["stdout"]
+        + diagnostic["stderr"]
+    )
+
+    assert synthetic_secret not in combined
+    assert synthetic_url not in combined
+
+    assert "synthetic-token-value" not in combined
+    assert "<redacted>" in combined
+
+    assert "\x1b" not in combined
+
+    assert len(diagnostic["stdout"]) <= 256 * 1024
+    assert len(diagnostic["stderr"]) <= 256 * 1024
+
+    assert str(error.value) == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+    assert diagnostic["stdout"] not in str(error.value)
+    assert diagnostic["stderr"] not in str(error.value)
+
+
+def test_entrypoint_rejected_rc_emits_only_sanitized_diagnostic(
+        capsys):
+    import _integration_single_file_runner as single_runner
+
+    synthetic_secret = "runner-secret-must-not-appear"
+
+    synthetic_url = (
+        "postgresql+asyncpg://"
+        "synthetic:"
+        + synthetic_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    class RejectingExecutor:
+        def run(self, *_args, **_kwargs):
+            raise OrchestrationError(
+                FailureClass.COMMAND_RETURN_CODE_REJECTED,
+                returncode=1,
+                diagnostic={
+                    "stdout":
+                        "child-stdout-secret="
+                        + synthetic_secret
+                        + "\n",
+                    "stderr":
+                        "child-database="
+                        + synthetic_url
+                        + "\n",
+                },
+            )
+
+    relative = (
+        "backend/tests/"
+        "test_publication_publish_http_integration.py"
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        single_runner._run_pytest(
+            RejectingExecutor(),
+            command=(
+                sys.executable,
+                "-m",
+                "pytest",
+            ),
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "DATABASE_URL": synthetic_url,
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    assert error.value.returncode == 1
+
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+
+    assert (
+        "INTEGRATION_CHILD_STDOUT_BEGIN"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDOUT_END"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDERR_BEGIN"
+        in captured.err
+    )
+
+    assert (
+        "INTEGRATION_CHILD_STDERR_END"
+        in captured.err
+    )
+
+    assert synthetic_secret not in captured.err
+    assert synthetic_url not in captured.err
+    assert "<redacted>" in captured.err
+
+
+def test_executor_rejected_rc_sanitizes_before_truncation_boundary(
+        monkeypatch):
+    from _integration_execute_orchestration import (
+        MAX_CAPTURE_BYTES,
+    )
+
+    env_secret = (
+        "R16F_BOUNDARY_ENV_SECRET_"
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    )
+
+    uri_secret = (
+        "R16F_BOUNDARY_URI_SECRET_"
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    )
+
+    database_url = (
+        "postgresql+asyncpg://synthetic:"
+        + uri_secret
+        + "@127.0.0.1:15432/marketingos_test_fake"
+    )
+
+    visible_env_chars = 8
+
+    stdout_padding = (
+        MAX_CAPTURE_BYTES
+        - visible_env_chars
+    )
+
+    stdout = (
+        "X" * stdout_padding
+        + env_secret
+        + ":after-boundary"
+    )
+
+    uri_prefix = (
+        "postgresql+asyncpg://synthetic:"
+    )
+
+    visible_uri_chars = 7
+
+    stderr_padding = (
+        MAX_CAPTURE_BYTES
+        - len(uri_prefix)
+        - visible_uri_chars
+    )
+
+    stderr = (
+        "Y" * stderr_padding
+        + database_url
+        + ":after-boundary"
+    )
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    with pytest.raises(OrchestrationError) as error:
+        SubprocessCommandExecutor().run(
+            (sys.executable, "-c", "pass"),
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "POSTGRES_TEST_PASSWORD":
+                    env_secret,
+                "DATABASE_URL":
+                    database_url,
+            },
+            allowed_returncodes=frozenset({0}),
+        )
+
+    diagnostic = error.value.diagnostic
+
+    assert diagnostic is not None
+
+    combined = (
+        diagnostic["stdout"]
+        + diagnostic["stderr"]
+    )
+
+    assert env_secret not in combined
+    assert uri_secret not in combined
+    assert database_url not in combined
+
+    assert (
+        env_secret[:visible_env_chars]
+        not in diagnostic["stdout"]
+    )
+
+    assert (
+        uri_secret[:visible_uri_chars]
+        not in diagnostic["stderr"]
+    )
+
+    assert len(diagnostic["stdout"]) <= MAX_CAPTURE_BYTES
+    assert len(diagnostic["stderr"]) <= MAX_CAPTURE_BYTES
+
+    assert str(error.value) == (
+        "COMMAND_RETURN_CODE_REJECTED: "
+        "returncode=7"
+    )
+
+
+def test_executor_allowed_nonzero_returncode_still_returns_result(monkeypatch):
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            5,
+            stdout="safe-marker\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake_run,
+    )
+
+    result = SubprocessCommandExecutor().run(
+        (sys.executable, "-c", "pass"),
+        env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        },
+        allowed_returncodes=frozenset({5}),
+    )
+
+    assert result.returncode == 5
+    assert result.stdout == "safe-marker\n"
+    assert result.stderr == ""
+
+
+def test_orchestration_error_without_returncode_preserves_exact_message():
+    error = OrchestrationError(
+        FailureClass.EXTERNAL_POSTGRES_SECRET_FORBIDDEN
+    )
+
+    assert error.returncode is None
+    assert (
+        str(error)
+        == "EXTERNAL_POSTGRES_SECRET_FORBIDDEN"
+    )
 
 
 def test_inventory_command_and_parser_are_fixed_field_minimal():
@@ -307,30 +736,121 @@ def test_successful_provision_orders_attestation_before_sentinel(tmp_path):
     assert Path(result["sentinel"]).stat().st_mode & 0o777 == 0o600
 
 
-def test_secret_generated_once_and_only_reaches_create_child(tmp_path, capsys):
-    spec, fake = fake_success(tmp_path); calls = []
+def test_secret_generated_once_and_only_reaches_transient_env_file(
+        tmp_path, capsys, monkeypatch):
+    spec, fake = fake_success(tmp_path)
+    calls = []
+    transport_events = []
+
+    real_write = flows.write_postgres_docker_env_file
+    real_remove = flows.remove_postgres_docker_env_file
+
     def generate():
         calls.append(True)
         return SYNTHETIC_SECRET
+
+    def tracked_write(path, password, **kwargs):
+        assert password == SYNTHETIC_SECRET
+
+        real_write(
+            path,
+            password,
+            **kwargs,
+        )
+
+        transport_events.append(
+            (
+                "written",
+                path,
+                path.read_text(encoding="ascii"),
+            )
+        )
+
+    def tracked_remove(path, **kwargs):
+        transport_events.append(
+            ("before_remove", path, path.exists())
+        )
+
+        real_remove(
+            path,
+            **kwargs,
+        )
+
+        transport_events.append(
+            ("removed", path, path.exists())
+        )
+
+    monkeypatch.setattr(
+        flows,
+        "write_postgres_docker_env_file",
+        tracked_write,
+    )
+    monkeypatch.setattr(
+        flows,
+        "remove_postgres_docker_env_file",
+        tracked_remove,
+    )
+
     result = provision_fast(
-        spec, executor=fake, approved_root=tmp_path / "approved",
+        spec,
+        executor=fake,
+        approved_root=tmp_path / "approved",
         secret_factory=generate,
     )
+
     assert len(calls) == 1
-    secret_calls = [(argv, kwargs) for argv, kwargs in fake.calls if
-                    kwargs.get("env", {}).get("POSTGRES_PASSWORD")]
-    assert len(secret_calls) == 1 and secret_calls[0][0] == spec.argv
-    argv, kwargs = secret_calls[0]
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert transport_events == [
+        (
+            "written",
+            transport,
+            f"POSTGRES_PASSWORD={SYNTHETIC_SECRET}" + chr(10),
+        ),
+        ("before_remove", transport, True),
+        ("removed", transport, False),
+    ]
+
+    create_calls = [
+        (argv, kwargs)
+        for argv, kwargs in fake.calls
+        if argv == spec.argv
+    ]
+
+    assert len(create_calls) == 1
+
+    argv, kwargs = create_calls[0]
+
     assert SYNTHETIC_SECRET not in " ".join(argv)
-    assert set(kwargs["env"]) == {"PATH", "LANG", "POSTGRES_PASSWORD"}
-    assert kwargs["env"]["POSTGRES_PASSWORD"] == SYNTHETIC_SECRET
-    assert SYNTHETIC_SECRET not in json.dumps(spec.sanitized_plan())
+    assert set(kwargs["env"]) == {"PATH", "LANG"}
+    assert "POSTGRES_PASSWORD" not in kwargs["env"]
+
+    assert not transport.exists()
+
+    assert SYNTHETIC_SECRET not in json.dumps(
+        spec.sanitized_plan()
+    )
     assert SYNTHETIC_SECRET not in json.dumps(result)
-    assert SYNTHETIC_SECRET not in Path(result["sentinel"]).read_text()
-    assert SYNTHETIC_SECRET not in (spec.temp_dir / "observation.json").read_text()
-    assert not [path for path in spec.temp_dir.iterdir() if path.is_file() and SYNTHETIC_SECRET in path.read_text()]
+    assert SYNTHETIC_SECRET not in Path(
+        result["sentinel"]
+    ).read_text()
+    assert SYNTHETIC_SECRET not in (
+        spec.temp_dir / "observation.json"
+    ).read_text()
+
+    assert not [
+        candidate
+        for candidate in spec.temp_dir.iterdir()
+        if candidate.is_file()
+        and SYNTHETIC_SECRET in candidate.read_text()
+    ]
+
     captured = capsys.readouterr()
-    assert SYNTHETIC_SECRET not in captured.out and SYNTHETIC_SECRET not in captured.err
+
+    assert SYNTHETIC_SECRET not in captured.out
+    assert SYNTHETIC_SECRET not in captured.err
+
 
 
 def test_default_csprng_is_invoked_once_with_32_bytes(tmp_path, monkeypatch):
@@ -454,10 +974,39 @@ def test_migration_builds_exact_argv_cwd_and_scrubbed_env(tmp_path):
     argv, env, cwd = build_migration_execution(
         sentinel_path=sentinel, run_id=RUN_ID, image=PG_IMAGE,
         runtime_password="runtime-only", executor=fake, approved_root=tmp_path / "approved")
-    assert argv[-2:] == ("upgrade", "7c91e2f4b6a8") and cwd.name == "backend"
+    assert argv[-2:] == ("upgrade", "4a7d9c2e6f10") and cwd.name == "backend"
     assert env["DATABASE_URL"].startswith("postgresql+asyncpg://")
-    assert "POSTGRES_TEST_PASSWORD" not in env and set(env) <= {"PATH", "LANG", "DATABASE_URL",
-        "ENVIRONMENT", "MARKETINGOS_TEST_MODE", "MARKETINGOS_TEST_RESOURCE_SCOPE", "TEST_RUN_ID"}
+
+    expected_environment = {
+        "PATH",
+        "LANG",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "SECRET_KEY",
+        "OPENAI_API_KEY",
+        "OAUTH_TOKEN_ENCRYPTION_KEY",
+        "ENVIRONMENT",
+        "MARKETINGOS_TEST_MODE",
+        "MARKETINGOS_TEST_RESOURCE_SCOPE",
+        "TEST_RUN_ID",
+    }
+    assert set(env) == expected_environment
+
+    assert env["REDIS_URL"] == "redis://127.0.0.1:1/15"
+    assert env["SECRET_KEY"] == "test-only-synthetic-secret-at-least-32-bytes"
+    assert env["OPENAI_API_KEY"] == "test-only-not-a-live-key"
+    assert (
+        env["OAUTH_TOKEN_ENCRYPTION_KEY"]
+        == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+
+    assert env["ENVIRONMENT"] == "test"
+    assert env["MARKETINGOS_TEST_MODE"] == "integration"
+    assert env["MARKETINGOS_TEST_RESOURCE_SCOPE"] == "disposable"
+    assert env["TEST_RUN_ID"] == RUN_ID
+
+    assert "POSTGRES_TEST_PASSWORD" not in env
+    assert "POSTGRES_PASSWORD" not in env
 
 
 def test_migration_wrong_run_rejects_before_commands(tmp_path):
@@ -825,3 +1374,1059 @@ def test_password_file_contract_has_no_plaintext_cli_and_preserves_env_rejection
     assert "--postgres-password=" not in script
     assert "POSTGRES_TEST_PASSWORD" in flow and "POSTGRES_PASSWORD" in flow
     assert "EXTERNAL_POSTGRES_SECRET_FORBIDDEN" in flow
+
+# R22 COMMIT16 RED PHASE — POSTGRES DOCKER SECRET TRANSPORT
+
+
+def test_postgres_secret_transport_red_spec_uses_run_scoped_env_file(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    expected_transport = spec.temp_dir / "postgres-docker.env"
+
+    assert "--env-file" in spec.argv, (
+        "RED_EXPECTED: PostgreSQL create must use --env-file"
+    )
+
+    index = spec.argv.index("--env-file")
+    assert index + 1 < len(spec.argv)
+    assert spec.argv[index + 1] == str(expected_transport)
+
+    assert "POSTGRES_PASSWORD" not in spec.argv
+    assert not any(
+        isinstance(token, str) and token.startswith("POSTGRES_PASSWORD=")
+        for token in spec.argv
+    )
+
+
+
+def test_postgres_secret_transport_red_create_child_env_has_no_password(tmp_path):
+    spec, fake = fake_success(tmp_path)
+
+    provision_fast(
+        spec,
+        executor=fake,
+        approved_root=tmp_path / "approved",
+        secret_factory=lambda: SYNTHETIC_SECRET,
+    )
+
+    create_calls = [
+        (argv, kwargs)
+        for argv, kwargs in fake.calls
+        if argv == spec.argv
+    ]
+
+    assert len(create_calls) == 1
+
+    _argv, kwargs = create_calls[0]
+    child_env = kwargs.get("env", {})
+
+    assert "POSTGRES_PASSWORD" not in child_env, (
+        "RED_EXPECTED: password must not cross sudo through subprocess env"
+    )
+    assert set(child_env) == {"PATH", "LANG"}
+
+
+def test_postgres_secret_transport_red_policy_accepts_exact_run_scoped_env_file(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    assert "--env-file" in spec.argv
+
+    env_file_index = spec.argv.index("--env-file")
+    assert spec.argv[env_file_index + 1] == str(
+        spec.temp_dir / "postgres-docker.env"
+    )
+
+    assert docker_subcommand(spec.argv) == "create", (
+        "Docker policy must accept the exact run-scoped "
+        "PostgreSQL env-file transport"
+    )
+
+    wrong_path = list(spec.argv)
+    wrong_path[env_file_index + 1] = str(
+        spec.temp_dir / "unexpected.env"
+    )
+
+    assert docker_subcommand(tuple(wrong_path)) is None, (
+        "Docker policy must reject any non-exact env-file path"
+    )
+
+# R22 COMMIT16 PHASE3C — TRANSPORT FAILURE PATHS
+
+
+def test_ambiguous_create_exception_removes_transport_before_preserve(tmp_path):
+    spec, fake = fake_success(tmp_path)
+    original = fake.handler
+
+    def handler(argv, kwargs, count):
+        if argv == spec.argv:
+            raise RuntimeError(
+                "synthetic-create-exception"
+            )
+
+        return original(
+            argv,
+            kwargs,
+            count,
+        )
+
+    fake.handler = handler
+
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(
+            spec,
+            executor=fake,
+            approved_root=tmp_path / "approved",
+            secret_factory=lambda: SYNTHETIC_SECRET,
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    )
+    assert (
+        error.value.original_category
+        is FailureClass.CREATE_FAILED
+    )
+    assert (
+        error.value.ownership_boundary
+        == "CREATE_AMBIGUOUS_PRESERVE"
+    )
+    assert error.value.resource_preserved is True
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert not transport.exists()
+    assert not any(
+        candidate.name.startswith(
+            ".postgres-docker.env."
+        )
+        for candidate in spec.temp_dir.iterdir()
+    )
+
+    assert SYNTHETIC_SECRET not in str(error.value)
+
+
+def test_nonzero_create_result_removes_transport_before_preserve(tmp_path):
+    spec, fake = fake_success(tmp_path)
+    original = fake.handler
+
+    def handler(argv, kwargs, count):
+        if argv == spec.argv:
+            return CommandResult(
+                1,
+                "",
+            )
+
+        return original(
+            argv,
+            kwargs,
+            count,
+        )
+
+    fake.handler = handler
+
+    with pytest.raises(OrchestrationError) as error:
+        provision_fast(
+            spec,
+            executor=fake,
+            approved_root=tmp_path / "approved",
+            secret_factory=lambda: SYNTHETIC_SECRET,
+        )
+
+    assert (
+        error.value.category
+        is FailureClass.PROVISION_FAILED_REVIEW_REQUIRED
+    )
+    assert (
+        error.value.original_category
+        is FailureClass.CREATE_FAILED
+    )
+    assert (
+        error.value.ownership_boundary
+        == "CREATE_AMBIGUOUS_PRESERVE"
+    )
+
+    transport = spec.temp_dir / "postgres-docker.env"
+
+    assert not transport.exists()
+    assert not any(
+        candidate.name.startswith(
+            ".postgres-docker.env."
+        )
+        for candidate in spec.temp_dir.iterdir()
+    )
+
+    assert SYNTHETIC_SECRET not in str(error.value)
+
+
+def test_redis_docker_policy_rejects_any_env_file(tmp_path):
+    spec = redis_spec(tmp_path)
+
+    candidate = list(spec.argv)
+    image_index = candidate.index(spec.image)
+
+    candidate[image_index:image_index] = [
+        "--env-file",
+        str(
+            spec.temp_dir
+            / "postgres-docker.env"
+        ),
+    ]
+
+    assert docker_subcommand(
+        tuple(candidate)
+    ) is None
+
+
+def test_postgres_execute_leaves_operator_password_file_unchanged(
+        tmp_path, monkeypatch):
+    password_path = _credential_file(
+        tmp_path,
+        monkeypatch,
+    )
+
+    before_bytes = password_path.read_bytes()
+    before_mode = (
+        password_path.stat(follow_symlinks=False).st_mode
+        & 0o777
+    )
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "provision_integration_resources_cleanroom.py"
+    )
+
+    def fake_provision(spec, *, executor, secret_factory):
+        assert secret_factory() == SYNTHETIC_SECRET
+
+        return {
+            "state": "READY",
+            "container_id": CID,
+            "secret_logged": False,
+        }
+
+    monkeypatch.setattr(
+        flows,
+        "provision_resource",
+        fake_provision,
+    )
+    monkeypatch.setattr(
+        "_integration_execute_flows.provision_resource",
+        fake_provision,
+    )
+    monkeypatch.setattr(
+        "_integration_execute_orchestration.SubprocessCommandExecutor",
+        lambda: object(),
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "postgres",
+            "--image",
+            PG_IMAGE,
+            "--port",
+            "15432",
+            "--run-id",
+            RUN_ID,
+            "--postgres-password-file",
+            str(password_path),
+            "--execute",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(
+            str(script),
+            run_name="__main__",
+        )
+
+    assert result.value.code == 0
+    assert password_path.read_bytes() == before_bytes
+    assert (
+        password_path.stat(
+            follow_symlinks=False
+        ).st_mode
+        & 0o777
+    ) == before_mode
+    assert before_mode == 0o600
+
+
+def test_inspect_template_is_missing_key_safe_for_hostconfig_tmpfs():
+    """HostConfig may omit Tmpfs; restricted Docker observation must still execute."""
+    import _integration_execute_orchestration as orchestration
+
+    argv = orchestration._inspect_argv(CID)
+
+    assert docker_subcommand(argv) == "inspect"
+
+    assert argv[:7] == (
+        *DOCKER_PRIVILEGE_PREFIX,
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+    )
+
+    assert argv[8] == CID
+
+    fields = argv[7].split("\n")
+
+    assert len(fields) == 11
+
+    assert tuple(fields[:9]) == (
+        "{{json .Id}}",
+        "{{json .Name}}",
+        "{{json .Config.Image}}",
+        "{{json .Config.Labels}}",
+        "{{json .State.Running}}",
+        "{{json .State.StartedAt}}",
+        "{{json .HostConfig.NetworkMode}}",
+        "{{json .NetworkSettings.Ports}}",
+        "{{json .Mounts}}",
+    )
+
+    expected_tmpfs_field = (
+        '{{if (index .HostConfig "Tmpfs")}}'
+        '{{json (index .HostConfig "Tmpfs")}}'
+        '{{else}}{}{{end}}'
+    )
+
+    assert fields[9] == expected_tmpfs_field
+
+    assert fields[10] == "{{json .Config.Volumes}}"
+
+    # The unsafe direct map-key lookup is the regression being blocked.
+    assert "{{json .HostConfig.Tmpfs}}" not in argv[7]
+
+    # Restricted observation remains secret-blind.
+    assert ".Config.Env" not in argv[7]
+    assert "POSTGRES_PASSWORD" not in argv[7]
+    assert "POSTGRES_TEST_PASSWORD" not in argv[7]
+
+
+def _commit18_assert_inventory_collision(items, spec):
+    with pytest.raises(OrchestrationError) as error:
+        reject_inventory_collision(items, spec)
+    assert error.value.category is FailureClass.INVENTORY_COLLISION
+
+
+def test_commit18_allows_canonical_postgres_sibling_for_redis(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    reject_inventory_collision((item,), planned)
+
+
+def test_commit18_allows_canonical_redis_sibling_for_postgres(tmp_path):
+    planned = pg_spec(tmp_path)
+    sibling = redis_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "redis",
+    )
+    reject_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_exact_planned_container_name(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        planned.container_name,
+        "true",
+        "r22-fedcba9876543210",
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_same_run_same_resource_type(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "different-postgres-name",
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_same_run_unknown_resource_type(tmp_path):
+    planned = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "marketingos-unknown-resource",
+        "true",
+        RUN_ID,
+        "mysql",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_opposite_type_with_wrong_canonical_name(tmp_path):
+    planned = redis_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        "wrong-postgres-sibling-name",
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_opposite_type_without_test_resource_label(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+    item = InventoryItem(
+        CID,
+        sibling.container_name,
+        "false",
+        RUN_ID,
+        "postgres",
+    )
+    _commit18_assert_inventory_collision((item,), planned)
+
+
+def test_commit18_rejects_more_than_one_same_run_sibling(tmp_path):
+    planned = redis_spec(tmp_path)
+    sibling = pg_spec(tmp_path)
+
+    first = InventoryItem(
+        CID,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+
+    second = InventoryItem(
+        "d" * 64,
+        sibling.container_name,
+        "true",
+        RUN_ID,
+        "postgres",
+    )
+
+    _commit18_assert_inventory_collision(
+        (first, second),
+        planned,
+    )
+
+
+def test_commit18_allows_unrelated_labeled_resource(tmp_path):
+    planned = pg_spec(tmp_path)
+
+    item = InventoryItem(
+        CID,
+        "marketingos-r22-fedcba9876543210-postgres",
+        "true",
+        "r22-fedcba9876543210",
+        "postgres",
+    )
+
+    reject_inventory_collision(
+        (item,),
+        planned,
+    )
+
+
+# R22_ENTRYPOINT_POLICY_FAKE_ONLY_BEGIN
+
+def _entrypoint_policy_fake(
+    returncode,
+    stdout="",
+    stderr="",
+):
+    return FakeExecutor(
+        lambda _argv, _kwargs, _count:
+            CommandResult(
+                returncode,
+                stdout,
+                stderr,
+            )
+    )
+
+
+def test_entrypoint_policy_reconciliation_exit5_plus_markers_normalizes_to_zero():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+        "\nno tests ran in 0.01s\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    result = single_runner._run_pytest(
+        fake,
+        command=command,
+        child_env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "DATABASE_URL":
+                "postgresql+asyncpg://"
+                "synthetic@127.0.0.1:1/"
+                "marketingos_test_fake",
+        },
+        cwd=Path("/tmp"),
+        relative=relative,
+    )
+
+    assert result == 0
+
+    assert "-s" in command
+
+    assert (
+        "-p",
+        "_test_isolation_plugin",
+    ) == (
+        command[
+            command.index("-p"):
+            command.index("-p") + 2
+        ]
+    )
+
+    assert (
+        "_v013h_legacy_target_compat"
+        in command
+    )
+
+    assert len(fake.calls) == 1
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({5})
+
+    assert (
+        "POSTGRES_TEST_PASSWORD"
+        not in kwargs["env"]
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        (
+            "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        ),
+        (
+            "Provider/Meta execution invoked: NO\n"
+        ),
+        "",
+    ],
+)
+def test_entrypoint_policy_reconciliation_exit5_missing_marker_fails_closed(
+    stdout,
+):
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="semantic success markers",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+
+def test_entrypoint_policy_reconciliation_unexpected_exit0_fails_closed():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        0,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unexpected pytest return code",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({5})
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        (
+            "backend/tests/"
+            "test_p4_ai_accounting_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_platform_admin_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_keyword_intelligence_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_http_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_normal_mode_integration.py"
+        ),
+    ],
+)
+def test_entrypoint_policy_collectable_files_accept_exit0_only(
+    relative,
+):
+    import _integration_single_file_runner as single_runner
+
+    fake = _entrypoint_policy_fake(
+        0,
+        "1 passed\n",
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    result = single_runner._run_pytest(
+        fake,
+        command=command,
+        child_env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        },
+        cwd=Path("/tmp"),
+        relative=relative,
+    )
+
+    assert result == 0
+    assert "-s" not in command
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({0})
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        (
+            "backend/tests/"
+            "test_p4_ai_accounting_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_platform_admin_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_p5_keyword_intelligence_postgres_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_http_integration.py"
+        ),
+        (
+            "backend/tests/"
+            "test_publication_publish_normal_mode_integration.py"
+        ),
+    ],
+)
+def test_entrypoint_policy_collectable_files_exit5_fails_closed(
+    relative,
+):
+    import _integration_single_file_runner as single_runner
+
+    fake = _entrypoint_policy_fake(
+        5,
+        "no tests ran\n",
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unexpected pytest return code",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+    _, kwargs = fake.calls[0]
+
+    assert kwargs[
+        "allowed_returncodes"
+    ] == frozenset({0})
+
+
+def test_entrypoint_policy_reconciliation_marker_cardinality_is_exact():
+    import _integration_single_file_runner as single_runner
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    stdout = (
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Real PostgreSQL reconciliation service integration: FULL PASS\n"
+        "Provider/Meta execution invoked: NO\n"
+    )
+
+    fake = _entrypoint_policy_fake(
+        5,
+        stdout,
+    )
+
+    command = single_runner._pytest_command(
+        relative
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="semantic success markers",
+    ):
+        single_runner._run_pytest(
+            fake,
+            command=command,
+            child_env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+            },
+            cwd=Path("/tmp"),
+            relative=relative,
+        )
+
+
+# R22_ENTRYPOINT_POLICY_FAKE_ONLY_END
+
+def test_create_policy_requires_explicit_pull_never(tmp_path):
+    spec = pg_spec(tmp_path)
+
+    assert spec.argv[4:6] == ("--pull", "never")
+    assert spec.argv.count("--pull") == 1
+    assert docker_subcommand(spec.argv) == "create"
+
+    pull_index = spec.argv.index("--pull")
+
+    without_pull = (
+        spec.argv[:pull_index]
+        + spec.argv[pull_index + 2:]
+    )
+
+    assert docker_subcommand(without_pull) is None
+
+    default_missing = list(spec.argv)
+    default_missing[pull_index + 1] = "missing"
+
+    assert docker_subcommand(tuple(default_missing)) is None
+
+    always_pull = list(spec.argv)
+    always_pull[pull_index + 1] = "always"
+
+    assert docker_subcommand(tuple(always_pull)) is None
+
+# R18CW_BEGIN_CANONICAL_CHILD_PYTHONPATH_CONTRACT
+def test_single_file_runner_derives_canonical_pythonpath_without_ambient_inheritance(
+        monkeypatch):
+    import _integration_single_file_runner as single_runner
+
+    root = (
+        Path(single_runner.__file__)
+        .resolve()
+        .parents[2]
+    )
+
+    relative = (
+        "backend/tests/"
+        "test_publication_reconciliation_postgres_integration.py"
+    )
+
+    requested = (
+        root
+        / relative
+    )
+
+    class FakeAttestation:
+        resource_run_id = RUN_ID
+
+    captured = {}
+
+    monkeypatch.setenv(
+        "RESOURCE_RUN_ID",
+        RUN_ID,
+    )
+
+    monkeypatch.setenv(
+        "TEST_RUN_ID",
+        RUN_ID,
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_SENTINEL_PATH",
+        "/tmp/r18cw-synthetic-sentinel.json",
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_IMAGE_REFERENCE",
+        PG_IMAGE,
+    )
+
+    monkeypatch.setenv(
+        "POSTGRES_TEST_PASSWORD",
+        SYNTHETIC_SECRET,
+    )
+
+    ambient_pythonpath = (
+        "/tmp/r18cw-operator-pythonpath-a"
+        ":"
+        "/tmp/r18cw-operator-pythonpath-b"
+    )
+
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        ambient_pythonpath,
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "SubprocessCommandExecutor",
+        lambda: object(),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "attest_live_resource",
+        lambda **_kwargs: FakeAttestation(),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "reconstruct_database_url",
+        lambda _resource, _password: (
+            "postgresql+asyncpg://"
+            "synthetic@127.0.0.1:1/"
+            "marketingos_test_fake"
+        ),
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "validate_test_environment",
+        lambda: None,
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "safe_diagnostic",
+        lambda *_args, **_kwargs: {},
+    )
+
+    monkeypatch.setattr(
+        single_runner,
+        "assert_same_run_resources",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run_pytest(
+            executor,
+            *,
+            command,
+            child_env,
+            cwd,
+            relative):
+        captured["executor"] = executor
+        captured["command"] = tuple(command)
+        captured["child_env"] = dict(child_env)
+        captured["cwd"] = cwd
+        captured["relative"] = relative
+        return 0
+
+    monkeypatch.setattr(
+        single_runner,
+        "_run_pytest",
+        fake_run_pytest,
+    )
+
+    result = single_runner.main(
+        [
+            str(requested),
+            "false",
+        ]
+    )
+
+    assert result == 0
+
+    expected_pythonpath = (
+        single_runner.os.pathsep.join(
+            (
+                str(root / "backend"),
+                str(root / "backend" / "tests"),
+            )
+        )
+    )
+
+    child_env = captured[
+        "child_env"
+    ]
+
+    assert child_env[
+        "PYTHONPATH"
+    ] == expected_pythonpath
+
+    assert (
+        ambient_pythonpath
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "/tmp/r18cw-operator-pythonpath-a"
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "/tmp/r18cw-operator-pythonpath-b"
+        not in child_env[
+            "PYTHONPATH"
+        ]
+    )
+
+    assert (
+        "POSTGRES_TEST_PASSWORD"
+        not in child_env
+    )
+
+    assert child_env[
+        "DATABASE_URL"
+    ] == (
+        "postgresql+asyncpg://"
+        "synthetic@127.0.0.1:1/"
+        "marketingos_test_fake"
+    )
+
+    assert child_env[
+        "REDIS_URL"
+    ] == "redis://127.0.0.1:1/15"
+
+    assert captured[
+        "cwd"
+    ] == root / "backend"
+
+    assert captured[
+        "relative"
+    ] == relative
+
+    command = captured[
+        "command"
+    ]
+
+    first_plugin = command.index(
+        "-p"
+    )
+
+    second_plugin = command.index(
+        "-p",
+        first_plugin + 1,
+    )
+
+    assert command[
+        first_plugin + 1
+    ] == "_test_isolation_plugin"
+
+    assert command[
+        second_plugin + 1
+    ] == "_v013h_legacy_target_compat"
+
+    assert command.count(
+        "-p"
+    ) == 2
+# R18CW_END_CANONICAL_CHILD_PYTHONPATH_CONTRACT

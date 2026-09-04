@@ -1,16 +1,21 @@
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+FROM python@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
+
+RUN apk upgrade --no-cache
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN addgroup --system appgroup && \
-    adduser --system --ingroup appgroup appuser
+RUN addgroup -S appgroup && \
+    adduser -S -D -H -G appgroup appuser
 
-COPY requirements.txt .
+COPY requirements.lock .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install \
+    --no-cache-dir \
+    --require-hashes \
+    -r requirements.lock
 
 COPY app ./app
 COPY alembic ./alembic

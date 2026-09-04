@@ -4,6 +4,10 @@ from uuid import UUID
 
 from fastapi import HTTPException, Response
 
+from app.core.rate_limit import (
+    enforce_rate_limit as application_enforce_rate_limit,
+)
+
 import sys as _publication_compat_sys
 from pathlib import Path as _publication_compat_Path
 
@@ -799,14 +803,24 @@ async def outcome_unknown_case():
 
 
 async def main():
-    await permission_denied_case()
-    await disabled_case()
-    await transport_unavailable_case()
-    await success_case()
-    await stale_hash_case()
-    await confirmation_rejected_case()
-    await provider_rejection_case()
-    await outcome_unknown_case()
+    original_rate_limit = application_enforce_rate_limit
+
+    async def allow_rate_limit(**kwargs):
+        return None
+
+    publications.enforce_rate_limit = allow_rate_limit
+
+    try:
+        await permission_denied_case()
+        await disabled_case()
+        await transport_unavailable_case()
+        await success_case()
+        await stale_hash_case()
+        await confirmation_rejected_case()
+        await provider_rejection_case()
+        await outcome_unknown_case()
+    finally:
+        publications.enforce_rate_limit = original_rate_limit
 
     print()
     print(

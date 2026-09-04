@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { backendFetch } from "@/lib/backend";
+import { setSessionCookies } from "@/lib/auth-cookies";
 
 export async function POST(request: Request) {
   try {
@@ -32,33 +33,15 @@ export async function POST(request: Request) {
       ok: true,
     });
 
-    result.cookies.set(
-      "marketingos_access_token",
-      data.access_token,
-      {
-        httpOnly: true,
-        sameSite: "lax",
-        secure:
-          process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: data.expires_in || 1800,
-      },
-    );
-
-    if (data.refresh_token) {
-      result.cookies.set(
-        "marketingos_refresh_token",
-        data.refresh_token,
-        {
-          httpOnly: true,
-          sameSite: "lax",
-          secure:
-            process.env.NODE_ENV === "production",
-          path: "/",
-          maxAge: 60 * 60 * 24 * 30,
-        },
-      );
+    if (!data.access_token || !data.refresh_token) {
+      throw new Error("Invalid token response");
     }
+    setSessionCookies(
+      result,
+      data.access_token,
+      data.refresh_token,
+      data.expires_in || 1800,
+    );
 
     return result;
   } catch {

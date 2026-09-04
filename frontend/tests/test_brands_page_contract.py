@@ -231,7 +231,7 @@ class BrandsPageContract(unittest.TestCase):
         self.assertGreaterEqual(
             len(
                 re.findall(
-                    r'\bfetch\s*\(',
+                    r'\b(?:fetch|sessionFetch)\s*\(',
                     self.source,
                 )
             ),
