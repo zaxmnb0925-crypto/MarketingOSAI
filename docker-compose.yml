@@ -1,7 +1,8 @@
 services:
 
   db:
-    image: postgres:16-alpine
+    image: ghcr.io/zaxmnb0925-crypto/marketingos-postgres:p5-r1-a3a891d-convergence-r3@sha256:ad8ac8367939421bcb94ccd45a6c43d73b15fb139760492e1f92efb19d8ce1fc
+    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -22,7 +23,7 @@ services:
       - marketingos_internal
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     restart: unless-stopped
     command:
       [
@@ -41,7 +42,7 @@ services:
       - marketingos_internal
 
   backend:
-    image: marketingos-backend:v015-beta-rc1
+    image: ghcr.io/zaxmnb0925-crypto/marketingos-backend:p5-r1-a3a891d-convergence-r3@sha256:79d225ffaa38f1495ec72709994116db1c0541fca8a09b2f479687b08674865e
     pull_policy: never
     # v0.13H defense-in-depth
     read_only: true
