@@ -58,6 +58,18 @@ type PaymentList = {
   offset: number;
 };
 
+type PaymentRequest = {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  owner_email: string;
+  owner_full_name: string | null;
+  requested_plan_code: string;
+  status: string;
+  customer_note: string | null;
+  created_at: string;
+};
+
 const PAGE_SIZE = 20;
 const PAYMENT_PAGE_SIZE = 10;
 
@@ -104,6 +116,8 @@ export default function AdminPage() {
   const [targetPlan, setTargetPlan] = useState("pro");
   const [actionMessage, setActionMessage] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
+  const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
+  const [paymentRequestMessage, setPaymentRequestMessage] = useState("");
 
   const handleAuthentication = useCallback(
     (status: number) => {
@@ -232,6 +246,31 @@ export default function AdminPage() {
     }
     void loadPayments();
   }, [handleAuthentication, paymentPage, paymentStatus, selected]);
+
+  useEffect(() => {
+    if (!identity) return;
+
+    async function loadPaymentRequests() {
+      try {
+        const response = await fetch("/api/admin/payment-requests", {
+          cache: "no-store",
+        });
+
+        if (handleAuthentication(response.status)) return;
+        if (response.status === 403) {
+          setPaymentRequestMessage("此管理員角色無付款申請讀取權限。");
+          return;
+        }
+        if (!response.ok) throw new Error();
+
+        setPaymentRequests(await response.json());
+      } catch {
+        setPaymentRequestMessage("目前無法載入付款申請。");
+      }
+    }
+
+    void loadPaymentRequests();
+  }, [handleAuthentication, identity]);
 
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -486,6 +525,51 @@ export default function AdminPage() {
               </form>
 
               {actionMessage ? <p className="admin-empty">{actionMessage}</p> : null}
+            </section>
+
+            <section className="admin-card">
+              <div className="admin-card-heading">
+                <div>
+                  <div className="eyebrow">CUSTOMER REQUESTS</div>
+                  <h2>客戶方案申請</h2>
+                </div>
+              </div>
+
+              {paymentRequestMessage ? (
+                <p className="admin-empty">{paymentRequestMessage}</p>
+              ) : paymentRequests.length === 0 ? (
+                <p className="admin-empty">目前沒有客戶方案申請。</p>
+              ) : (
+                <div className="admin-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>客戶</th>
+                        <th>Workspace</th>
+                        <th>方案</th>
+                        <th>狀態</th>
+                        <th>申請日期</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentRequests.map((request) => (
+                        <tr key={request.id}>
+                          <td>
+                            {request.owner_full_name || "—"}<br />
+                            <small>{request.owner_email}</small>
+                          </td>
+                          <td>{request.workspace_name}</td>
+                          <td>{request.requested_plan_code}</td>
+                          <td>
+                            <span className="admin-status">{request.status}</span>
+                          </td>
+                          <td>{formatDate(request.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
 
             <section className="admin-card">
