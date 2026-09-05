@@ -13,6 +13,7 @@ from app.models.user import User
 from app.schemas.payment_request import (
     PaymentRequestCreate,
     PaymentRequestResponse,
+    AdminPaymentRequestResponse,
 )
 
 
@@ -78,4 +79,42 @@ async def list_payment_requests(
     return [
         PaymentRequestResponse.model_validate(item)
         for item in result.scalars().all()
+    ]
+
+
+@router.get(
+    "/api/platform-admin/payment-requests",
+    response_model=list[AdminPaymentRequestResponse],
+)
+async def platform_admin_payment_requests(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.api.platform_admin_access import require_platform_admin_payment_read
+    from app.models.membership import Membership, MembershipRole
+    from app.models.workspace import Workspace
+    from app.schemas.payment_request import AdminPaymentRequestResponse
+
+    await require_platform_admin_payment_read(db, current_user)
+
+    result = await db.execute(
+        select(PaymentRequest, Workspace, User)
+        .join(Workspace, Workspace.id == PaymentRequest.workspace_id)
+        .join(
+            Membership,
+            Membership.workspace_id == Workspace.id,
+        )
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.role == MembershipRole.owner)
+        .order_by(PaymentRequest.created_at.desc())
+    )
+
+    return [
+        AdminPaymentRequestResponse(
+            **PaymentRequestResponse.model_validate(request).model_dump(),
+            workspace_name=workspace.name,
+            owner_email=owner.email,
+            owner_full_name=owner.full_name,
+        )
+        for request, workspace, owner in result.all()
     ]

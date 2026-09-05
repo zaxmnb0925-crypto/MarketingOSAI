@@ -21,3 +21,9 @@ class PaymentRequestResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AdminPaymentRequestResponse(PaymentRequestResponse):
+    workspace_name: str
+    owner_email: str
+    owner_full_name: str | None
