@@ -98,6 +98,12 @@ export default function AdminPage() {
   const [paymentPage, setPaymentPage] = useState(0);
   const [payments, setPayments] = useState<PaymentList | null>(null);
   const [paymentMessage, setPaymentMessage] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("bank_transfer");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [targetPlan, setTargetPlan] = useState("pro");
+  const [actionMessage, setActionMessage] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
 
   const handleAuthentication = useCallback(
     (status: number) => {
@@ -238,6 +244,76 @@ export default function AdminPage() {
     router.replace("/login");
   }
 
+  async function recordPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+
+    setActionBusy(true);
+    setActionMessage("");
+
+    const response = await fetch(
+      `/api/admin/workspaces/${selected.id}/payments`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          method: paymentMethod,
+          amount_minor: Math.round(Number(paymentAmount) * 100),
+          currency: "TWD",
+          external_reference: paymentReference || null,
+          idempotency_key: `admin-${selected.id}-${Date.now()}`,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      setActionMessage("付款紀錄建立失敗，請確認金額與權限。");
+      setActionBusy(false);
+      return;
+    }
+
+    setPaymentAmount("");
+    setPaymentReference("");
+    setActionMessage("付款紀錄已建立，請在下方確認收款。");
+    setActionBusy(false);
+    setPaymentStatus("pending");
+    setPaymentPage(0);
+  }
+
+  async function confirmPayment(paymentId: string) {
+    if (!selected) return;
+
+    const reason = window.prompt("請輸入確認收款原因：", "已確認收到客戶款項");
+    if (!reason?.trim()) return;
+
+    setActionBusy(true);
+    setActionMessage("");
+
+    const response = await fetch(
+      `/api/admin/workspaces/${selected.id}/payments/${paymentId}/confirm`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_plan_code: targetPlan,
+          price_selection: "list",
+          reason: reason.trim(),
+          request_id: `confirm-${paymentId}-${Date.now()}`,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      setActionMessage("確認收款失敗，請檢查方案或權限。");
+      setActionBusy(false);
+      return;
+    }
+
+    setActionMessage("收款已確認，客戶方案已啟用。");
+    setActionBusy(false);
+    window.location.reload();
+  }
+
   if (loading) {
     return <main className="admin-state">正在驗證管理員身分…</main>;
   }
@@ -375,6 +451,44 @@ export default function AdminPage() {
             </section>
 
             <section className="admin-card">
+              <div className="admin-card-heading">
+                <div>
+                  <div className="eyebrow">BILLING ACTIONS</div>
+                  <h2>登錄客戶付款</h2>
+                </div>
+              </div>
+
+              <form className="admin-facts" onSubmit={recordPayment}>
+                <label>
+                  付款方式
+                  <input value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} required />
+                </label>
+                <label>
+                  金額（TWD）
+                  <input type="number" min="1" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} required />
+                </label>
+                <label>
+                  方案
+                  <select value={targetPlan} onChange={(event) => setTargetPlan(event.target.value)}>
+                    <option value="starter">Starter</option>
+                    <option value="pro">Pro</option>
+                    <option value="business">Business</option>
+                    <option value="agency">Agency</option>
+                  </select>
+                </label>
+                <label>
+                  參考編號
+                  <input value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} />
+                </label>
+                <button className="primary-button" type="submit" disabled={!selected || actionBusy}>
+                  登錄付款
+                </button>
+              </form>
+
+              {actionMessage ? <p className="admin-empty">{actionMessage}</p> : null}
+            </section>
+
+            <section className="admin-card">
               <div className="admin-card-heading payment-heading">
                 <div>
                   <div className="eyebrow">PAYMENT RECORDS</div>
@@ -400,7 +514,7 @@ export default function AdminPage() {
 
               <div className="admin-table-wrap">
                 <table className="admin-table">
-                  <thead><tr><th>日期</th><th>方式</th><th>金額</th><th>狀態</th><th>參考編號</th></tr></thead>
+                  <thead><tr><th>日期</th><th>方式</th><th>金額</th><th>狀態</th><th>參考編號</th><th>操作</th></tr></thead>
                   <tbody>
                     {payments?.items.map((payment) => (
                       <tr key={payment.id}>
@@ -409,6 +523,18 @@ export default function AdminPage() {
                         <td>{formatMoney(payment.amount_minor, payment.currency)}</td>
                         <td><span className="admin-status">{payment.status}</span></td>
                         <td>{payment.external_reference || "—"}</td>
+                        <td>
+                          {payment.status === "pending" ? (
+                            <button
+                              type="button"
+                              className="primary-button"
+                              disabled={actionBusy}
+                              onClick={() => void confirmPayment(payment.id)}
+                            >
+                              確認收款並啟用
+                            </button>
+                          ) : "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
