@@ -278,6 +278,32 @@ export default function AdminPage() {
     setQuery(searchInput.trim());
   }
 
+  async function contactPaymentRequest(requestId: string) {
+    setActionBusy(true);
+    setActionMessage("");
+
+    const response = await fetch(
+      `/api/admin/payment-requests/${requestId}/contact`,
+      { method: "POST" },
+    );
+
+    if (!response.ok) {
+      setActionMessage("更新申請狀態失敗。");
+      setActionBusy(false);
+      return;
+    }
+
+    const updated: PaymentRequest = await response.json();
+
+    setPaymentRequests((items) =>
+      items.map((item) =>
+        item.id === updated.id ? { ...item, status: updated.status } : item,
+      ),
+    );
+    setActionMessage("已標記為已聯繫。");
+    setActionBusy(false);
+  }
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
@@ -564,6 +590,18 @@ export default function AdminPage() {
                             <span className="admin-status">{request.status}</span>
                           </td>
                           <td>{formatDate(request.created_at)}</td>
+                          <td>
+                            {request.status === "requested" ? (
+                              <button
+                                type="button"
+                                className="primary-button"
+                                disabled={actionBusy}
+                                onClick={() => void contactPaymentRequest(request.id)}
+                              >
+                                已聯繫
+                              </button>
+                            ) : "—"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

@@ -100,6 +100,46 @@ async def list_payment_requests(
     ]
 
 
+@router.post(
+    "/api/platform-admin/payment-requests/{request_id}/contact",
+    response_model=PaymentRequestResponse,
+)
+async def contact_payment_request(
+    request_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi import HTTPException
+    from app.api.platform_admin_access import require_platform_admin_payment_read
+
+    await require_platform_admin_payment_read(current_user, db)
+
+    result = await db.execute(
+        select(PaymentRequest).where(
+            PaymentRequest.id == request_id
+        )
+    )
+    request = result.scalar_one_or_none()
+
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment request not found",
+        )
+
+    if request.status != "requested":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Payment request is not awaiting contact",
+        )
+
+    request.status = "contacted"
+    await db.commit()
+    await db.refresh(request)
+
+    return PaymentRequestResponse.model_validate(request)
+
+
 @router.get(
     "/api/platform-admin/payment-requests",
     response_model=list[AdminPaymentRequestResponse],
