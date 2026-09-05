@@ -151,3 +151,4 @@ __all__.extend([
     "AIQualityPolicyStatus",
 ])
 
+\nfrom app.models.payment_request import (\n    PaymentRequest,\n    PaymentRequestStatus,\n)\n__all__.extend(["PaymentRequest", "PaymentRequestStatus"])\n
