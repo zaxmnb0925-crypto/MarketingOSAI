@@ -21,6 +21,7 @@ from app.api.usage import (
     platform_admin_router as platform_admin_usage_router,
 )
 from app.api.publications import router as publication_router
+from app.api.payment_requests import router as payment_request_router
 from app.api.keyword_intelligence import (
     router as keyword_intelligence_router,
 )
@@ -70,6 +71,7 @@ app.include_router(oauth_connection_router)
 app.include_router(platform_admin_usage_router)
 app.include_router(publication_router)
 app.include_router(keyword_intelligence_router)
+app.include_router(payment_request_router)
 
 
 @app.get("/")
