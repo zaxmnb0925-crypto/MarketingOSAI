@@ -49,6 +49,24 @@ async def create_payment_request(
             detail="Public subscription plan not found",
         )
 
+    duplicate_result = await db.execute(
+        select(PaymentRequest).where(
+            PaymentRequest.workspace_id == workspace_id,
+            PaymentRequest.requested_plan_code == plan_code,
+            PaymentRequest.status.in_(
+                ["requested", "payment_pending"]
+            ),
+        )
+    )
+
+    if duplicate_result.scalar_one_or_none() is not None:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An active request for this plan already exists",
+        )
+
     request = PaymentRequest(
         workspace_id=workspace_id,
         requested_plan_code=plan_code,
