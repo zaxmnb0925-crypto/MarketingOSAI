@@ -25,7 +25,6 @@ router = APIRouter(tags=["Subscriptions"])
     response_model=list[PlanResponse],
 )
 async def list_plans(
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_default_plans(db)
