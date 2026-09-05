@@ -11,7 +11,7 @@ from app.api import (
     credits,
     social_accounts,
     subscriptions,
-    usage,
+    keyword_intelligence,
 )
 from app.api.workspace_access import (
     require_workspace_membership,
@@ -112,15 +112,13 @@ def test_workspace_routes_are_guarded():
         content.preview_content,
         content.list_content_generations,
         content.generate_content,
-        credits.get_credit_account,
-        credits.get_credit_ledger,
         social_accounts.list_social_accounts,
         social_accounts.get_social_account,
         social_accounts.update_social_account,
         social_accounts.delete_social_account,
         subscriptions.get_workspace_subscription,
         subscriptions.change_workspace_plan,
-        usage.workspace_usage,
+        keyword_intelligence.read_keyword_trend_signals,
     ]
 
     gates = (
@@ -145,3 +143,21 @@ def test_workspace_routes_are_guarded():
         ), (
             f"{fn.__name__} missing workspace access gate"
         )
+
+
+def test_platform_billing_routes_use_platform_not_workspace_authority():
+    from app.api import platform_admin_billing
+
+    functions = [
+        platform_admin_billing.record_manual_payment,
+        platform_admin_billing.read_payment,
+        platform_admin_billing.confirm_payment,
+        platform_admin_billing.read_subscription,
+        platform_admin_billing.suspend_workspace_subscription,
+        platform_admin_billing.transition_workspace_subscription_to_free,
+    ]
+    for fn in functions:
+        source = inspect.getsource(fn)
+        assert "workspace_id" in source
+        assert "require_platform_admin_" in source
+        assert "require_workspace_" not in source

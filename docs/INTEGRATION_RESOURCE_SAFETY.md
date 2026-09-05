@@ -10,10 +10,11 @@ Docker-backed resources require immutable image digests, exact container IDs, lo
 
 Container name alone is not ownership evidence. Pre-start `ss` and `lsof` checks reduce collision risk but do not eliminate races; a fresh post-start observation must match the sentinel, listener, labels, identity, digest, port, start time, and temporary directory before migration or tests. Cleanup repeats the same validation. Mismatch preserves the resource for human review—never use broad process killing, pruning, wildcard deletion, `FLUSHALL`, or `FLUSHDB`.
 
-PostgreSQL database and user names are derived from the run ID. `DATABASE_URL` is reconstructed in process memory from attested fields plus a runtime-only synthetic password. Redis uses an attested dedicated resource, non-default loopback port, and non-zero DB; `REDIS_URL` is likewise reconstructed. Arbitrary inherited URLs are unset. Schema bootstrap may target only Alembic source head `7c91e2f4b6a8` after the migration gate passes.
+PostgreSQL database and user names are derived from the run ID. `DATABASE_URL` is reconstructed in process memory from attested fields plus a runtime-only synthetic password. Redis uses an attested dedicated resource, non-default loopback port, and non-zero DB; `REDIS_URL` is likewise reconstructed. Arbitrary inherited URLs are unset. Schema bootstrap may target only Alembic source head `f0289623eb1e` after the migration gate passes.
 
 The first integration entry point accepts exactly one of:
 
+- `backend/tests/test_p4_ai_accounting_postgres_integration.py` (PostgreSQL)
 - `backend/tests/test_publication_reconciliation_postgres_integration.py` (PostgreSQL)
 - `backend/tests/test_publication_publish_http_integration.py` (PostgreSQL and Redis)
 - `backend/tests/test_publication_publish_normal_mode_integration.py` (PostgreSQL and Redis)
@@ -24,7 +25,7 @@ Test fixture identities are derived from `TEST_RUN_ID`; publish tests select onl
 
 The provision, observation, migration, and teardown CLIs are default-dry-run and statically verified. Image references must use `repository@sha256:<64 lowercase hex>`; tag-only references are rejected. Docker specifications use argv lists, explicit loopback publishing, required ownership labels, bridge networking, and no Production mount or network. PostgreSQL provisioning generates a 256-bit synthetic secret inside the execute process. External PostgreSQL secret variables are rejected; the generated value exists only in the fixed Docker child environment and never enters argv, sentinel JSON, diagnostics, or sanitized plans.
 
-Supplied Docker observations must attest the exact container ID, digest, labels, derived name, running state, host/internal ports, start time, mounts, and bridge network. Migration authorization reconstructs the target in memory and fixes the source head at `7c91e2f4b6a8`. Teardown authorization produces commands only for the exact attested container ID and validates the exact run/resource cleanup directory. Any mismatch reports no authorization and preserves the resource.
+Supplied Docker observations must attest the exact container ID, digest, labels, derived name, running state, host/internal ports, start time, mounts, and bridge network. Migration authorization reconstructs the target in memory and fixes the source head at `f0289623eb1e`. Teardown authorization produces commands only for the exact attested container ID and validates the exact run/resource cleanup directory. Any mismatch reports no authorization and preserves the resource.
 
 The only permitted lifecycle order is provision → observe → attest → migrate PostgreSQL → one exact allowlisted integration file → verify → exact teardown. Actual Docker execution, resource creation, Alembic execution, and integration tests remain unapproved and have not occurred.
 

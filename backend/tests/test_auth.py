@@ -64,3 +64,12 @@ def test_token_response_contract_contains_both_tokens():
     assert response.access_token == "access"
     assert response.refresh_token == "refresh"
     assert response.token_type == "bearer"
+
+
+def test_registration_provisions_free_subscription_in_same_transaction():
+    source = inspect.getsource(auth.register)
+    assert "provision_free_subscription" in source
+    assert source.index("provision_free_subscription") < source.index(
+        "await db.commit()"
+    )
+    assert "await db.rollback()" in source

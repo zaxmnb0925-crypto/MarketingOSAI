@@ -22,6 +22,9 @@ from app.models.membership import (
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.workspace import Workspace
+from app.services.subscriptions import (
+    provision_free_subscription,
+)
 from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
@@ -133,17 +136,22 @@ async def register(
         workspace,
     ])
 
-    await db.flush()
-
-    membership = Membership(
-        user_id=user.id,
-        workspace_id=workspace.id,
-        role=MembershipRole.owner,
-    )
-
-    db.add(membership)
-
     try:
+        await db.flush()
+
+        await provision_free_subscription(
+            db,
+            workspace.id,
+        )
+
+        db.add(
+            Membership(
+                user_id=user.id,
+                workspace_id=workspace.id,
+                role=MembershipRole.owner,
+            )
+        )
+
         await db.commit()
     except Exception:
         await db.rollback()

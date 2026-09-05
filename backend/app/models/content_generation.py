@@ -130,6 +130,10 @@ class ContentGeneration(Base):
         nullable=True,
     )
 
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_evaluator: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quality_disclosure: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utcnow,

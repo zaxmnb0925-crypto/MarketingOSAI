@@ -31,14 +31,9 @@ type ContentItem = {
   topic: string;
   objective: string | null;
   status: string;
-  prompt: string | null;
   generated_content: string | null;
-  model: string | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  estimated_cost_usd: string | null;
-  error_message: string | null;
-  created_at?: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export {

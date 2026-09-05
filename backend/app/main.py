@@ -9,10 +9,21 @@ from app.api.credits import router as credit_router
 from app.api.subscriptions import (
     router as subscription_router,
 )
+from app.api.platform_admin_billing import (
+    router as platform_admin_billing_router,
+)
+from app.api.platform_admin_console import (
+    router as platform_admin_console_router,
+)
 from app.api.social_accounts import router as social_account_router
 from app.api.oauth_connections import router as oauth_connection_router
-from app.api.usage import router as usage_router
+from app.api.usage import (
+    platform_admin_router as platform_admin_usage_router,
+)
 from app.api.publications import router as publication_router
+from app.api.keyword_intelligence import (
+    router as keyword_intelligence_router,
+)
 from app.core.config import settings
 from app.core.request_context import (
     RequestContextMiddleware,
@@ -52,10 +63,13 @@ app.include_router(brand_router)
 app.include_router(content_router)
 app.include_router(credit_router)
 app.include_router(subscription_router)
+app.include_router(platform_admin_console_router)
+app.include_router(platform_admin_billing_router)
 app.include_router(social_account_router)
 app.include_router(oauth_connection_router)
-app.include_router(usage_router)
+app.include_router(platform_admin_usage_router)
 app.include_router(publication_router)
+app.include_router(keyword_intelligence_router)
 
 
 @app.get("/")
