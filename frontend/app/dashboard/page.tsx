@@ -173,7 +173,18 @@ export default function DashboardPage() {
                   onClick={() => setSelectedPlan(plan.code)}
                 >
                   <strong>{plan.name}</strong>
-                  <span>NT$ {plan.price_twd.toLocaleString()} / 月</span>
+                  <span>
+  {plan.promotional_price_minor !== null ? (
+    <>
+      <del>NT$ {plan.price_twd.toLocaleString()}</del>{" "}
+      <strong>
+        優惠價 NT$ {(plan.promotional_price_minor / 100).toLocaleString()} / 月
+      </strong>
+    </>
+  ) : (
+    <>NT$ {plan.price_twd.toLocaleString()} / 月</>
+  )}
+</span>
                   <small>{plan.monthly_credits.toLocaleString()} AI credits</small>
                 </button>
               ))}
