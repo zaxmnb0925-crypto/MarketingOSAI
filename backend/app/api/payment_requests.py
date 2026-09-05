@@ -59,7 +59,7 @@ async def create_payment_request(
         )
     )
 
-    if duplicate_result.scalar_one_or_none() is not None:
+    if duplicate_result.first() is not None:
         from fastapi import HTTPException
 
         raise HTTPException(
@@ -113,7 +113,7 @@ async def platform_admin_payment_requests(
     from app.models.workspace import Workspace
     from app.schemas.payment_request import AdminPaymentRequestResponse
 
-    await require_platform_admin_payment_read(db, current_user)
+    await require_platform_admin_payment_read(current_user, db)
 
     result = await db.execute(
         select(PaymentRequest, Workspace, User)
