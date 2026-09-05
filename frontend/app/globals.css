@@ -2212,3 +2212,21 @@ a {
     gap: 5px;
   }
 }
+
+
+.dashboard-panel:has(.plan-options) {
+  display: block;
+}
+
+.dashboard-panel:has(.plan-options) .plan-options {
+  width: 100%;
+  max-width: 900px;
+}
+
+.dashboard-panel:has(.plan-options) .plan-option {
+  min-width: 0;
+}
+
+.dashboard-panel:has(.plan-options) > p {
+  max-width: 680px;
+}
