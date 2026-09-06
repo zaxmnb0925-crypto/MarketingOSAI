@@ -221,10 +221,44 @@ export default function BillingPage() {
         return;
       }
 
+      const requestedPlanCode = selectedPlan;
+      const initialMessage = note.trim()
+        ? `您好，我想申請 ${requestedPlanCode} 方案。${note.trim()}`
+        : `您好，我想申請 ${requestedPlanCode} 方案，請提供付款方式。`;
+
       setRequests((items) => [data, ...items]);
       setNote("");
       setSelectedPlan("");
-      setMessage("方案申請已送出，客服將與您聯繫付款方式。");
+
+      let supportMessage =
+        "方案申請已送出，但付款客服對話建立失敗，請點右下角客服中心重試。";
+
+      try {
+        const supportResponse = await fetch(
+          `/api/workspaces/${workspace.id}/support/conversations`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              category: "payment",
+              subject: `${requestedPlanCode} 方案付款客服`,
+              message: initialMessage,
+              payment_request_id: data.id,
+            }),
+          },
+        );
+        const supportData =
+          await supportResponse.json().catch(() => null);
+
+        if (supportResponse.ok && supportData?.id) {
+          supportMessage =
+            "方案申請已送出，付款客服對話已開啟，請等待客服回覆。";
+        }
+      } catch {
+        // 付款申請已保留，客服視窗提供重試路徑。
+      }
+
+      setMessage(supportMessage);
       window.dispatchEvent(
         new CustomEvent("marketingos:open-support", {
           detail: { paymentRequestId: data.id },
@@ -308,7 +342,7 @@ export default function BillingPage() {
         <section className="dashboard-panel vertical">
           <div className="eyebrow">UPGRADE</div>
           <h2>選擇方案</h2>
-          <p>選擇升級方案後提交申請，客服會與您確認付款方式。</p>
+          <p>選擇升級方案後提交申請，系統會立即開啟付款客服對話。</p>
 
           <div className="billing-plan-grid">
             {plans.map((plan) => {
@@ -381,7 +415,7 @@ export default function BillingPage() {
             disabled={submitting || !selectedPlan}
             onClick={submitRequest}
           >
-            {submitting ? "送出中..." : "聯繫客服／申請方案"}
+            {submitting ? "送出中..." : "申請方案並開啟客服"}
           </button>
 
           {message ? (
