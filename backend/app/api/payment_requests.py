@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +8,10 @@ from app.api.deps import get_current_user
 from app.api.workspace_access import require_workspace_membership
 from app.core.database import get_db
 from app.models.payment_request import PaymentRequest
-from app.models.subscription import SubscriptionPlan
+from app.models.subscription import (
+    SubscriptionPlan,
+    WorkspaceSubscription,
+)
 from app.models.user import User
 from app.schemas.payment_request import (
     PaymentRequestCreate,
@@ -42,11 +45,37 @@ async def create_payment_request(
         )
     )
     if plan_result.scalar_one_or_none() is None:
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=404,
             detail="Public subscription plan not found",
+        )
+
+    subscription_result = await db.execute(
+        select(WorkspaceSubscription).where(
+            WorkspaceSubscription.workspace_id == workspace_id,
+        )
+    )
+    subscription = subscription_result.scalar_one_or_none()
+
+    if subscription is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workspace subscription is unavailable",
+        )
+
+    if plan_code == "free":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Free plan is already included",
+        )
+
+    if (
+        subscription.status == "active"
+        and subscription.plan_code == plan_code
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workspace is already on this plan",
         )
 
     duplicate_result = await db.execute(
