@@ -54,7 +54,7 @@ async def create_payment_request(
             PaymentRequest.workspace_id == workspace_id,
             PaymentRequest.requested_plan_code == plan_code,
             PaymentRequest.status.in_(
-                ["requested", "payment_pending"]
+                ["requested", "contacted", "payment_pending"]
             ),
         )
     )
