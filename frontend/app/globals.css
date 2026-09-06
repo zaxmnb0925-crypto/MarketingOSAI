@@ -2230,3 +2230,111 @@ a {
 .dashboard-panel:has(.plan-options) > p {
   max-width: 680px;
 }
+
+.dashboard-welcome {
+  align-items: flex-start;
+}
+
+.dashboard-welcome h2 {
+  margin: 8px 0;
+}
+
+.dashboard-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.dashboard-action,
+.dashboard-secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.dashboard-secondary-action {
+  border: 1px solid #294568;
+  color: #bfdbfe;
+}
+
+.dashboard-link-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.dashboard-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 118px;
+  padding: 20px;
+  border: 1px solid #203754;
+  border-radius: 14px;
+  background: #0d1d32;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dashboard-link-card:hover {
+  border-color: #4f7db5;
+}
+
+.dashboard-link-card strong {
+  color: #f8fafc;
+}
+
+.dashboard-link-card span {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.billing-current {
+  flex-direction: row;
+}
+
+.billing-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.billing-plan-option {
+  align-items: flex-start;
+  min-height: 138px;
+  text-align: left;
+}
+
+.billing-plan-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.billing-plan-option small {
+  margin-top: auto;
+}
+
+.billing-request-list {
+  margin-top: 18px;
+}
+
+@media (max-width: 800px) {
+  .dashboard-link-grid,
+  .billing-plan-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .billing-current {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
