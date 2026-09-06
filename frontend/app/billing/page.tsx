@@ -225,6 +225,11 @@ export default function BillingPage() {
       setNote("");
       setSelectedPlan("");
       setMessage("方案申請已送出，客服將與您聯繫付款方式。");
+      window.dispatchEvent(
+        new CustomEvent("marketingos:open-support", {
+          detail: { paymentRequestId: data.id },
+        }),
+      );
     } catch {
       setMessage("目前無法送出方案申請。");
     } finally {
@@ -397,6 +402,21 @@ export default function BillingPage() {
                   <span>{request.requested_plan_code}</span>
                   <span>{statusLabel(request.status)}</span>
                   <small>{dateFormat(request.created_at)}</small>
+                  <button
+                    className="request-support-button"
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("marketingos:open-support", {
+                          detail: {
+                            paymentRequestId: request.id,
+                          },
+                        }),
+                      )
+                    }
+                  >
+                    聯絡客服
+                  </button>
                 </div>
               ))}
             </div>

@@ -456,7 +456,7 @@ export default function AdminPage() {
           </div>
           <nav className="sidebar-nav">
             <a className="nav-item active" href="/admin">唯讀總覽</a>
-            <span className="nav-item disabled">操作功能尚未開放</span>
+            <a className="nav-item" href="/admin/support">客服中心</a>
           </nav>
         </div>
         <div className="sidebar-bottom">

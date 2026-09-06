@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 
 import "./globals.css";
 
+import SupportWidget from "@/components/support-widget";
+
 export const metadata: Metadata = {
   title: {
     default: "MarketingOS AI",
@@ -18,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant">
-      <body>{children}</body>
+      <body>{children}<SupportWidget /></body>
     </html>
   );
 }
