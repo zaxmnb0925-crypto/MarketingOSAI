@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ai_credit import WorkspaceCreditAccount
 from app.models.commercial import (
     AdminSubscriptionAudit,
     PaymentRecord,
@@ -715,6 +716,17 @@ async def confirm_manual_payment(
     if payment.status != PaymentStatus.pending.value:
         raise CommercialConflict("Payment cannot be confirmed")
 
+    account_result = await db.execute(
+        select(WorkspaceCreditAccount)
+        .where(
+            WorkspaceCreditAccount.workspace_id == workspace_id,
+        )
+        .with_for_update()
+    )
+    credit_account = account_result.scalar_one_or_none()
+    if credit_account is None:
+        raise CommercialCompositionError("Credit account is missing")
+
     subscription = await _locked_subscription(db, workspace_id)
     plan = await _selectable_plan(db, target_plan_code)
     before_composition = await load_authoritative_composition(db, subscription)
@@ -908,6 +920,21 @@ async def confirm_manual_payment(
     subscription.billing_currency = "TWD"
     subscription.pricing_source = pricing_source
     subscription.entitlement_version += 1
+
+    subscription.credits_granted = plan.monthly_credits
+    if behavior in {
+        "FULL_TERM_ACTIVATION",
+        "EXPIRED_OR_LAPSED_REACTIVATION",
+    }:
+        subscription.credits_used = 0
+        subscription.cycle_start = effective_at
+        subscription.cycle_end = subscription.expires_at
+
+    credit_account.balance = max(
+        subscription.credits_granted - subscription.credits_used,
+        0,
+    )
+    credit_account.updated_at = effective_at
     subscription.updated_at = effective_at
 
     new_composition = _composition(
