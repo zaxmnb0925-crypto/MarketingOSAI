@@ -2,6 +2,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -14,6 +15,7 @@ from app.api.platform_admin_access import (
 from app.core.database import get_db
 from app.models.commercial import PlatformAdminMembership
 from app.models.subscription import WorkspaceSubscription
+from app.models.payment_request import PaymentRequest
 from app.models.user import User
 from app.schemas.commercial import (
     ManualPaymentCreateRequest,
@@ -179,17 +181,38 @@ async def confirm_payment(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        target_plan_code = payload.target_plan_code.strip().lower()
+
         result = await confirm_manual_payment(
             db,
             workspace_id=workspace_id,
             payment_id=payment_id,
-            target_plan_code=payload.target_plan_code.strip().lower(),
+            target_plan_code=target_plan_code,
             price_selection=payload.price_selection.value,
             actor_user_id=current_user.id,
             actor_admin_role=admin.role,
             reason=payload.reason,
             request_id=payload.request_id,
         )
+
+        request_result = await db.execute(
+            select(PaymentRequest)
+            .where(
+                PaymentRequest.workspace_id == workspace_id,
+                PaymentRequest.requested_plan_code == target_plan_code,
+                PaymentRequest.status.in_(
+                    ["contacted", "payment_pending"]
+                ),
+            )
+            .order_by(PaymentRequest.created_at.desc())
+            .with_for_update()
+        )
+        payment_request = request_result.scalars().first()
+
+        if payment_request is not None:
+            payment_request.status = "fulfilled"
+            payment_request.payment_record_id = result.payment.id
+
         await db.commit()
     except (CommercialNotFound, CommercialConflict, CommercialCompositionError, CommercialValidationError) as exc:
         await db.rollback()
