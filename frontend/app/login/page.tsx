@@ -152,6 +152,10 @@ export default function LoginPage() {
           還沒有帳號？ <a href="/register">免費註冊</a>
         </div>
 
+        <div className="auth-links">
+          遇到系統問題？ <a href="/support">公開問題回報</a>
+        </div>
+
         <div className="auth-security">
           安全登入 · HttpOnly Session
         </div>

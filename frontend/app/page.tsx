@@ -12,6 +12,7 @@ export default function Home() {
         <nav className="public-nav-links">
           <a href="#features">功能</a>
           <a href="#plans">方案</a>
+          <Link href="/support">問題回報</Link>
           <Link href="/login">登入</Link>
           <Link className="public-nav-cta" href="/register">免費開始</Link>
         </nav>
@@ -96,7 +97,7 @@ export default function Home() {
 
       <footer className="public-footer">
         <span>© MarketingOS</span>
-        <div><Link href="/login">登入</Link><Link href="/register">註冊</Link></div>
+        <div><Link href="/support">問題回報</Link><Link href="/login">登入</Link><Link href="/register">註冊</Link></div>
       </footer>
     </main>
   );

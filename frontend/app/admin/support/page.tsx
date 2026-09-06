@@ -274,6 +274,12 @@ export default function AdminSupportPage() {
             >
               客服中心
             </a>
+            <a
+              className="nav-item"
+              href="/admin/support/inquiries"
+            >
+              公開問題回報
+            </a>
           </nav>
         </div>
 
