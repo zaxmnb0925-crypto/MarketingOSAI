@@ -348,6 +348,39 @@ export default function AdminPage() {
   async function confirmPayment(paymentId: string) {
     if (!selected) return;
 
+    const payment = payments?.items.find((item) => item.id === paymentId);
+    if (!payment) {
+      setActionMessage("找不到要確認的付款紀錄。");
+      return;
+    }
+
+    const confirmableRequests = paymentRequests.filter(
+      (request) =>
+        request.workspace_id === selected.id &&
+        request.requested_plan_code === targetPlan &&
+        ["contacted", "payment_pending"].includes(request.status),
+    );
+
+    if (confirmableRequests.length === 0) {
+      setActionMessage(
+        "找不到此 Workspace 可確認的方案申請，請先由客戶提出申請並標記為已聯繫。",
+      );
+      return;
+    }
+
+    if (confirmableRequests.length > 1) {
+      setActionMessage(
+        "此方案有多筆可確認申請，為避免誤綁付款，請先整理重複申請。",
+      );
+      return;
+    }
+
+    const paymentRequest = confirmableRequests[0];
+    if (!paymentRequest) {
+      setActionMessage("找不到可綁定的方案申請。");
+      return;
+    }
+
     const reason = window.prompt("請輸入確認收款原因：", "已確認收到客戶款項");
     if (!reason?.trim()) return;
 
@@ -361,15 +394,19 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           target_plan_code: targetPlan,
-          price_selection: "list",
+          price_selection:
+            targetPlan === "pro" && payment.amount_minor === 99000
+              ? "promotion"
+              : "list",
           reason: reason.trim(),
+          payment_request_id: paymentRequest.id,
           request_id: `confirm-${paymentId}-${Date.now()}`,
         }),
       },
     );
 
     if (!response.ok) {
-      setActionMessage("確認收款失敗，請檢查方案或權限。");
+      setActionMessage("確認收款失敗，請檢查方案、付款金額或權限。");
       setActionBusy(false);
       return;
     }
@@ -535,10 +572,8 @@ export default function AdminPage() {
                 <label>
                   方案
                   <select value={targetPlan} onChange={(event) => setTargetPlan(event.target.value)}>
-                    <option value="starter">Starter</option>
                     <option value="pro">Pro</option>
                     <option value="business">Business</option>
-                    <option value="agency">Agency</option>
                   </select>
                 </label>
                 <label>

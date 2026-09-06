@@ -58,6 +58,7 @@ class PaymentConfirmationRequest(BaseModel):
     target_plan_code: str = Field(min_length=1, max_length=32)
     price_selection: CommercialPriceSelection = CommercialPriceSelection.list
     reason: str = Field(min_length=1)
+    payment_request_id: UUID
     request_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("target_plan_code")

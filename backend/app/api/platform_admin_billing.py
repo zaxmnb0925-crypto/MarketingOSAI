@@ -183,6 +183,38 @@ async def confirm_payment(
     try:
         target_plan_code = payload.target_plan_code.strip().lower()
 
+        request_result = await db.execute(
+            select(PaymentRequest)
+            .where(
+                PaymentRequest.id == payload.payment_request_id,
+                PaymentRequest.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        )
+        payment_request = request_result.scalar_one_or_none()
+
+        if payment_request is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Payment request not found",
+            )
+
+        if payment_request.requested_plan_code != target_plan_code:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Payment request plan does not match confirmation plan",
+            )
+
+        if payment_request.status not in {"contacted", "payment_pending"}:
+            if not (
+                payment_request.status == "fulfilled"
+                and payment_request.payment_record_id == payment_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Payment request is not confirmable",
+                )
+
         result = await confirm_manual_payment(
             db,
             workspace_id=workspace_id,
@@ -195,21 +227,7 @@ async def confirm_payment(
             request_id=payload.request_id,
         )
 
-        request_result = await db.execute(
-            select(PaymentRequest)
-            .where(
-                PaymentRequest.workspace_id == workspace_id,
-                PaymentRequest.requested_plan_code == target_plan_code,
-                PaymentRequest.status.in_(
-                    ["contacted", "payment_pending"]
-                ),
-            )
-            .order_by(PaymentRequest.created_at.desc())
-            .with_for_update()
-        )
-        payment_request = request_result.scalars().first()
-
-        if payment_request is not None:
+        if payment_request.status != "fulfilled":
             payment_request.status = "fulfilled"
             payment_request.payment_record_id = result.payment.id
 
