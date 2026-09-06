@@ -446,6 +446,12 @@ export default function AdminPage() {
     ? Math.max(1, Math.ceil(payments.total / PAYMENT_PAGE_SIZE))
     : 1;
 
+  const selectedPaymentRequests = selected
+    ? paymentRequests.filter(
+        (request) => request.workspace_id === selected.id,
+      )
+    : [];
+
   return (
     <main className="admin-shell">
       <aside className="admin-sidebar">
@@ -588,7 +594,7 @@ export default function AdminPage() {
               {actionMessage ? <p className="admin-empty">{actionMessage}</p> : null}
             </section>
 
-            <section className="admin-card">
+            <section className="admin-card admin-request-card">
               <div className="admin-card-heading">
                 <div>
                   <div className="eyebrow">CUSTOMER REQUESTS</div>
@@ -598,7 +604,7 @@ export default function AdminPage() {
 
               {paymentRequestMessage ? (
                 <p className="admin-empty">{paymentRequestMessage}</p>
-              ) : paymentRequests.length === 0 ? (
+              ) : selectedPaymentRequests.length === 0 ? (
                 <p className="admin-empty">目前沒有客戶方案申請。</p>
               ) : (
                 <div className="admin-table-wrap">
@@ -606,21 +612,20 @@ export default function AdminPage() {
                     <thead>
                       <tr>
                         <th>客戶</th>
-                        <th>Workspace</th>
                         <th>方案</th>
                         <th>狀態</th>
                         <th>申請日期</th>
+                        <th>操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {paymentRequests.map((request) => (
+                      {selectedPaymentRequests.map((request) => (
                         <tr key={request.id}>
                           <td>
                             {request.owner_full_name || "—"}<br />
                             <small>{request.owner_email}</small>
                           </td>
-                          <td>{request.workspace_name}</td>
-                          <td>{request.requested_plan_code}</td>
+                            <td>{request.requested_plan_code}</td>
                           <td>
                             <span className="admin-status">{request.status}</span>
                           </td>
@@ -645,7 +650,7 @@ export default function AdminPage() {
               )}
             </section>
 
-            <section className="admin-card">
+            <section className="admin-card admin-payment-card">
               <div className="admin-card-heading payment-heading">
                 <div>
                   <div className="eyebrow">PAYMENT RECORDS</div>

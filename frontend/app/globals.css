@@ -3323,3 +3323,130 @@ a {
     display: grid;
   }
 }
+
+
+/* R23 admin workspace console cleanup */
+
+.admin-shell {
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+
+.admin-sidebar {
+  padding: 16px 12px;
+}
+
+.admin-main {
+  padding: 22px;
+}
+
+.admin-layout {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.admin-detail {
+  gap: 12px;
+}
+
+.admin-card {
+  padding: 16px;
+  border-radius: 14px;
+}
+
+.admin-header h1 {
+  margin: 6px 0;
+  font-size: 28px;
+}
+
+.admin-header p {
+  font-size: 13px;
+}
+
+.admin-list {
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.workspace-row {
+  padding: 10px;
+}
+
+.admin-pagination {
+  margin-top: 12px;
+}
+
+.admin-facts {
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.admin-facts div {
+  padding: 10px;
+}
+
+.admin-facts dt {
+  font-size: 10px;
+}
+
+.admin-facts dd {
+  font-size: 14px;
+}
+
+.admin-search input,
+.admin-search button,
+.payment-heading select {
+  min-height: 36px;
+  font-size: 12px;
+}
+
+.admin-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 8px 9px;
+  font-size: 12px;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.admin-table td small {
+  font-size: 10px;
+}
+
+.admin-request-card .admin-table-wrap,
+.admin-payment-card .admin-table-wrap {
+  max-height: 270px;
+  overflow: auto;
+}
+
+.admin-request-card .primary-button,
+.admin-payment-card .primary-button {
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .admin-shell {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+
+  .admin-main {
+    padding: 16px;
+  }
+
+  .admin-layout {
+    grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+  }
+}
