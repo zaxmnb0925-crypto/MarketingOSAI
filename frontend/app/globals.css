@@ -2338,3 +2338,281 @@ a {
     align-items: flex-start;
   }
 }
+
+
+.public-site {
+  min-height: 100vh;
+  padding: 0 6vw;
+  background:
+    radial-gradient(circle at 80% 8%, rgba(37, 99, 235, .14), transparent 30%),
+    #071322;
+  color: #e2e8f0;
+}
+
+.public-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1180px;
+  min-height: 78px;
+  margin: auto;
+}
+
+.public-brand,
+.public-nav-links,
+.public-card-tags,
+.public-footer div {
+  display: flex;
+  align-items: center;
+}
+
+.public-brand {
+  gap: 12px;
+  color: #f8fafc;
+  text-decoration: none;
+}
+
+.public-nav-links {
+  gap: 24px;
+  font-size: 14px;
+}
+
+.public-nav-links a,
+.public-footer a {
+  color: #a8bad2;
+  text-decoration: none;
+}
+
+.public-nav-cta {
+  padding: 10px 16px;
+  border: 1px solid #35639b;
+  border-radius: 999px;
+  color: #dbeafe !important;
+}
+
+.public-hero {
+  display: grid;
+  grid-template-columns: 1.05fr .95fr;
+  align-items: center;
+  gap: 80px;
+  max-width: 1180px;
+  min-height: 570px;
+  margin: auto;
+}
+
+.public-hero h1 {
+  margin: 14px 0 22px;
+  color: #f8fafc;
+  font-size: clamp(42px, 6vw, 76px);
+  letter-spacing: -.06em;
+  line-height: 1.08;
+}
+
+.public-hero p {
+  max-width: 540px;
+  color: #9db0c9;
+  font-size: 17px;
+  line-height: 1.9;
+}
+
+.public-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.public-hero-card {
+  padding: 34px;
+  border: 1px solid #223b5c;
+  border-radius: 24px;
+  background: linear-gradient(145deg, #17365d, #081728);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .25);
+}
+
+.public-hero-card h2 {
+  margin-top: 28px;
+  color: #f8fafc;
+  font-size: 28px;
+  line-height: 1.35;
+}
+
+.public-lines {
+  display: grid;
+  gap: 12px;
+  margin-top: 34px;
+}
+
+.public-lines span {
+  height: 10px;
+  border-radius: 999px;
+  background: #264569;
+}
+
+.public-lines span:first-child {
+  width: 88%;
+  background: #4d8bd4;
+}
+
+.public-lines span:nth-child(2) {
+  width: 68%;
+}
+
+.public-lines span:last-child {
+  width: 78%;
+}
+
+.public-card-tags {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 36px;
+  color: #8fb5e5;
+  font-size: 12px;
+}
+
+.public-section {
+  max-width: 1180px;
+  margin: auto;
+  padding: 84px 0;
+}
+
+.public-section h2 {
+  max-width: 680px;
+  margin: 12px 0 0;
+  color: #f8fafc;
+  font-size: clamp(28px, 4vw, 44px);
+}
+
+.public-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 36px;
+}
+
+.public-feature-card {
+  min-height: 180px;
+  padding: 26px;
+  border: 1px solid #1d3553;
+  border-radius: 18px;
+  background: #0b1a2d;
+}
+
+.public-feature-card > span {
+  color: #60a5fa;
+}
+
+.public-feature-card h3 {
+  margin: 34px 0 10px;
+  color: #f8fafc;
+}
+
+.public-feature-card p,
+.public-plans p {
+  margin: 0;
+  color: #91a5bf;
+  line-height: 1.75;
+}
+
+.public-plans {
+  display: grid;
+  grid-template-columns: .8fr 1.2fr;
+  align-items: center;
+  gap: 50px;
+}
+
+.public-price-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.public-price-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid #203a5c;
+  border-radius: 14px;
+  background: #0b1a2d;
+}
+
+.public-price-card strong {
+  color: #f8fafc;
+  font-size: 19px;
+}
+
+.public-price-card span {
+  color: #bed0e6;
+  text-align: right;
+}
+
+.public-price-card.featured {
+  border-color: #6556d9;
+  background: #13274b;
+}
+
+.public-footer {
+  display: flex;
+  justify-content: space-between;
+  max-width: 1180px;
+  margin: auto;
+  padding: 28px 0 40px;
+  border-top: 1px solid #1b304b;
+  color: #7186a0;
+  font-size: 13px;
+}
+
+.public-footer div {
+  gap: 18px;
+}
+
+.auth-back-link {
+  display: inline-block;
+  margin-bottom: 26px;
+  color: #8da7c5;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.auth-links {
+  margin-top: 20px;
+  color: #8da0b8;
+  font-size: 13px;
+  text-align: center;
+}
+
+.auth-links a {
+  color: #93c5fd;
+  text-decoration: none;
+}
+
+@media (max-width: 800px) {
+  .public-site {
+    padding: 0 22px;
+  }
+
+  .public-nav-links {
+    gap: 12px;
+  }
+
+  .public-nav-links a[href="#features"],
+  .public-nav-links a[href="#plans"] {
+    display: none;
+  }
+
+  .public-hero,
+  .public-plans,
+  .public-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .public-hero {
+    gap: 38px;
+    min-height: auto;
+    padding: 70px 0 34px;
+  }
+
+  .public-section {
+    padding: 58px 0;
+  }
+}

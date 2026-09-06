@@ -148,6 +148,10 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <div className="auth-links">
+          還沒有帳號？ <a href="/register">免費註冊</a>
+        </div>
+
         <div className="auth-security">
           安全登入 · HttpOnly Session
         </div>
