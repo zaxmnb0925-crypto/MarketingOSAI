@@ -25,7 +25,7 @@ type SocialAccount = {
 };
 
 const platformLabels: Record<string, string> = {
-  facebook: "Facebook",
+  facebook: "臉書粉絲專頁",
   instagram: "Instagram",
   threads: "Threads",
   linkedin: "LinkedIn",
@@ -264,7 +264,7 @@ export default function SocialAccountsPage() {
 
           {accounts.length === 0 ? (
             <div className="social-account-empty">
-              <div className="eyebrow">NOT CONNECTED</div>
+              <div className="eyebrow">尚未連接</div>
               <h2>尚未連接社群帳號</h2>
               <p>
                 請先連接 Meta，授權 Facebook 或 Instagram
