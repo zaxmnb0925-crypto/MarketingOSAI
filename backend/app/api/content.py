@@ -56,6 +56,7 @@ from app.models.ai_quality_policy_governance import (
 )
 from app.schemas.content import (
     ContentGenerationResponse,
+    ContentGenerationUpdateRequest,
     ContentPreviewRequest,
     CustomerContentGenerationResponse,
     GenerateContentResponse,
@@ -621,6 +622,87 @@ async def generate_content(
         ),
         forbidden_word_hits=output_forbidden_hits,
     )
+
+
+@router.patch(
+    "/{generation_id}",
+    response_model=CustomerContentGenerationResponse,
+)
+async def update_content_generation(
+    workspace_id: UUID,
+    brand_id: UUID,
+    generation_id: UUID,
+    payload: ContentGenerationUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(
+        db,
+        current_user,
+        workspace_id,
+    )
+
+    content = payload.generated_content.strip()
+
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Generated content cannot be empty",
+        )
+
+    if len(content) > 20000:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Generated content is too long",
+        )
+
+    brand = await get_brand_for_workspace(
+        db,
+        workspace_id,
+        brand_id,
+    )
+
+    forbidden_hits = detect_forbidden_words(
+        content,
+        brand.forbidden_words,
+    )
+
+    if forbidden_hits:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "文案包含品牌禁用詞，請修改後再儲存。",
+                "forbidden_word_hits": forbidden_hits,
+            },
+        )
+
+    generation = await db.scalar(
+        select(ContentGeneration).where(
+            ContentGeneration.id == generation_id,
+            ContentGeneration.workspace_id == workspace_id,
+            ContentGeneration.brand_id == brand_id,
+            ContentGeneration.status.in_(
+                [
+                    ContentStatus.completed,
+                    ContentStatus.draft,
+                ]
+            ),
+        )
+    )
+
+    if generation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation not found",
+        )
+
+    generation.generated_content = content
+    generation.status = ContentStatus.draft
+
+    await db.commit()
+    await db.refresh(generation)
+
+    return serialize_customer_generation(generation)
 
 
 @router.put(

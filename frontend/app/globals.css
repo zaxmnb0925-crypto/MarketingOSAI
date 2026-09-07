@@ -3726,3 +3726,12 @@ a {
     min-height: 300px;
   }
 }
+
+
+/* R23 AI draft persistence */
+
+.save-message {
+  margin-top: 10px;
+  color: #86efac;
+  font-size: 0.9rem;
+}

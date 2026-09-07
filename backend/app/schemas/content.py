@@ -63,6 +63,10 @@ class ContentPreviewRequest(BaseModel):
     )
 
 
+class ContentGenerationUpdateRequest(BaseModel):
+    generated_content: str
+
+
 class ContentGenerationResponse(BaseModel):
     id: UUID
     workspace_id: UUID

@@ -116,6 +116,12 @@ export default function CreatePage() {
   const [copied, setCopied] =
     useState(false);
 
+  const [saving, setSaving] =
+    useState(false);
+
+  const [saveMessage, setSaveMessage] =
+    useState("");
+
 
   useEffect(() => {
     async function load() {
@@ -211,6 +217,7 @@ export default function CreatePage() {
     setResult(null);
     setEditableContent("");
     setCopied(false);
+    setSaveMessage("");
 
     try {
       const response =
@@ -273,6 +280,7 @@ export default function CreatePage() {
         data.generation.generated_content || "",
       );
       setCopied(false);
+      setSaveMessage("");
     } catch {
       setError(
         "目前無法連線至 AI 生成服務。",
@@ -297,6 +305,78 @@ export default function CreatePage() {
       );
     } catch {
       setCopied(false);
+    }
+  }
+
+
+  async function saveGenerated() {
+    if (
+      !workspace ||
+      !brandId ||
+      !result?.generation.id ||
+      !editableContent.trim()
+    ) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setSaveMessage("");
+
+    try {
+      const response = await fetch(
+        `/api/workspaces/${workspace.id}/brands/${brandId}/content/${result.generation.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            generated_content: editableContent,
+          }),
+        },
+      );
+
+      const saved = await response.json().catch(() => null);
+
+      if (!response.ok || !saved?.id) {
+        const detail = saved?.detail;
+        const message =
+          typeof detail === "string"
+            ? detail
+            : typeof detail?.message === "string"
+              ? detail.message
+              : "文案儲存失敗。";
+
+        setError(message);
+        return;
+      }
+
+      const savedContent =
+        typeof saved.generated_content === "string"
+          ? saved.generated_content
+          : editableContent.trim();
+
+      setResult((current) => {
+        if (!current) return current;
+
+        return {
+          ...current,
+          generation: {
+            ...current.generation,
+            id: saved.id,
+            status: saved.status || "draft",
+            generated_content: savedContent,
+          },
+        };
+      });
+
+      setEditableContent(savedContent);
+      setSaveMessage("已儲存修改，歷史紀錄會保留這個草稿版本。");
+    } catch {
+      setError("目前無法儲存文案。");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -715,7 +795,7 @@ export default function CreatePage() {
             </div>
 
 
-            {editableContent ? (
+            {result ? (
               <>
                 <textarea
                   className="generated-content-editor"
@@ -729,6 +809,18 @@ export default function CreatePage() {
                 />
 
                 <div className="result-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={saveGenerated}
+                    disabled={
+                      saving ||
+                      !editableContent.trim()
+                    }
+                  >
+                    {saving ? "儲存中..." : "儲存修改"}
+                  </button>
+
                   <button
                     type="button"
                     className="secondary-button"
@@ -750,6 +842,12 @@ export default function CreatePage() {
                       : "重新生成"}
                   </button>
                 </div>
+
+                {saveMessage ? (
+                  <div className="save-message">
+                    {saveMessage}
+                  </div>
+                ) : null}
 
                 {result &&
                 result.forbidden_word_hits.length > 0 ? (
