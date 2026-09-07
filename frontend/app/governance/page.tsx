@@ -308,6 +308,8 @@ export default function GovernancePage() {
             <a className="nav-item" href="/create">AI 創作</a>
             <a className="nav-item" href="/history">內容歷史</a>
             <a className="nav-item active" href="/governance">品質治理</a>
+
+            <a className="nav-item" href="/social-accounts">社群帳號</a>
           </nav>
         </div>
         <a className="logout-button governance-back" href="/dashboard">返回 Dashboard</a>

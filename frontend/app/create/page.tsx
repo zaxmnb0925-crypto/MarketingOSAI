@@ -539,6 +539,8 @@ export default function CreatePage() {
             >
               內容歷史
             </a>
+
+            <a className="nav-item" href="/social-accounts">社群帳號</a>
           </nav>
         </div>
 
