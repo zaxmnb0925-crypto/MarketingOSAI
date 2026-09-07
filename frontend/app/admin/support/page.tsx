@@ -3,6 +3,7 @@
 import {
   FormEvent,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -64,12 +65,94 @@ export default function AdminSupportPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [unreadConversationIds, setUnreadConversationIds] =
+    useState<string[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const soundEnabledRef = useRef(false);
+  const inboxSnapshotRef = useRef<Record<string, string>>({});
+  const inboxInitializedRef = useRef(false);
+  const selectedIdRef = useRef<string | null>(null);
+  const suppressedActivityRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    setUnreadConversationIds((items) =>
+      selectedId
+        ? items.filter((id) => id !== selectedId)
+        : items,
+    );
+  }, [selectedId]);
+
+  function enableNotificationSound() {
+    const AudioContextConstructor =
+      window.AudioContext ||
+      (
+        window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
+
+    if (!AudioContextConstructor) {
+      setError("此瀏覽器不支援客服提示音。");
+      return;
+    }
+
+    const context =
+      audioContextRef.current ||
+      new AudioContextConstructor();
+
+    audioContextRef.current = context;
+    soundEnabledRef.current = true;
+    setSoundEnabled(true);
+    void context.resume();
+  }
+
+  function playNotificationSound() {
+    const context = audioContextRef.current;
+
+    if (!soundEnabledRef.current || !context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, now);
+    oscillator.frequency.exponentialRampToValueAtTime(
+      660,
+      now + 0.16,
+    );
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(
+      0.16,
+      now + 0.02,
+    );
+    gain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      now + 0.32,
+    );
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.34);
+  }
 
   useEffect(() => {
     let active = true;
+    let firstLoad = true;
+
+    inboxSnapshotRef.current = {};
+    inboxInitializedRef.current = false;
 
     async function loadInbox() {
-      setLoading(true);
+      if (firstLoad) setLoading(true);
 
       try {
         const identityResponse = await fetch(
@@ -109,6 +192,80 @@ export default function AdminSupportPage() {
 
         if (!active) return;
 
+        const previousSnapshot =
+          inboxSnapshotRef.current;
+
+        const currentSnapshot = Object.fromEntries(
+          data.map((item) => [
+            item.id,
+            item.last_message_at || item.updated_at,
+          ]),
+        );
+
+        const changedConversationIds =
+          inboxInitializedRef.current
+            ? data
+                .filter((item) => {
+                  const currentAt =
+                    item.last_message_at ||
+                    item.updated_at;
+                  const previousAt =
+                    previousSnapshot[item.id];
+
+                  if (
+                    !previousAt ||
+                    !currentAt ||
+                    previousAt === currentAt
+                  ) {
+                    return false;
+                  }
+
+                  const suppressedAt =
+                    suppressedActivityRef.current[item.id];
+
+                  if (suppressedAt === currentAt) {
+                    delete suppressedActivityRef.current[
+                      item.id
+                    ];
+                    return false;
+                  }
+
+                  return true;
+                })
+                .map((item) => item.id)
+            : [];
+
+        const newConversationIds =
+          inboxInitializedRef.current
+            ? data
+                .filter(
+                  (item) =>
+                    !previousSnapshot[item.id],
+                )
+                .map((item) => item.id)
+            : [];
+
+        const notificationIds = Array.from(
+          new Set([
+            ...changedConversationIds,
+            ...newConversationIds,
+          ]),
+        );
+
+        if (notificationIds.length > 0) {
+          setUnreadConversationIds((items) =>
+            Array.from(
+              new Set([...items, ...notificationIds]),
+            ).filter(
+              (id) => id !== selectedIdRef.current,
+            ),
+          );
+          playNotificationSound();
+        }
+
+        inboxSnapshotRef.current = currentSnapshot;
+        inboxInitializedRef.current = true;
+
         setIdentity(identityData);
         setConversations(data);
         setSelectedId((current) => {
@@ -125,14 +282,23 @@ export default function AdminSupportPage() {
           setError("目前無法載入客服收件匣。");
         }
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+          firstLoad = false;
+        }
       }
     }
 
     void loadInbox();
 
+    const interval = window.setInterval(
+      loadInbox,
+      5000,
+    );
+
     return () => {
       active = false;
+      window.clearInterval(interval);
     };
   }, [router, statusFilter]);
 
@@ -208,6 +374,11 @@ export default function AdminSupportPage() {
       }
 
       setDraft("");
+
+      if (data?.created_at) {
+        suppressedActivityRef.current[selectedId] =
+          data.created_at;
+      }
     } catch {
       setError("目前無法送出客服訊息。");
     } finally {
@@ -320,12 +491,41 @@ export default function AdminSupportPage() {
           <div className="dashboard-error">{error}</div>
         ) : null}
 
+        <div className="admin-support-toolbar">
+          <div>
+            <strong>
+              {unreadConversationIds.length > 0
+                ? `有 ${unreadConversationIds.length} 個新客服對話`
+                : "收件匣會自動更新"}
+            </strong>
+            <span>每 5 秒檢查新訊息</span>
+          </div>
+          <button
+            type="button"
+            className={`admin-sound-toggle ${
+              soundEnabled ? "enabled" : ""
+            }`}
+            onClick={enableNotificationSound}
+          >
+            {soundEnabled
+              ? "🔔 提示音已開啟"
+              : "🔕 開啟提示音"}
+          </button>
+        </div>
+
         <div className="admin-support-layout">
           <section className="admin-card admin-support-inbox">
             <div className="admin-card-heading">
               <div>
                 <div className="eyebrow">INBOX</div>
-                <h2>客戶對話</h2>
+                <h2>
+                  客戶對話
+                  {unreadConversationIds.length > 0 ? (
+                    <span className="admin-unread-badge">
+                      {unreadConversationIds.length}
+                    </span>
+                  ) : null}
+                </h2>
               </div>
 
               <label className="admin-support-filter">
@@ -355,6 +555,12 @@ export default function AdminSupportPage() {
                       selectedId === conversation.id
                         ? "selected"
                         : ""
+                    } ${
+                      unreadConversationIds.includes(
+                        conversation.id,
+                      )
+                        ? "unread"
+                        : ""
                     }`}
                     key={conversation.id}
                     type="button"
@@ -377,6 +583,13 @@ export default function AdminSupportPage() {
                       {conversation.workspace_name} ·{" "}
                       {conversation.category}
                     </small>
+                    {unreadConversationIds.includes(
+                      conversation.id,
+                    ) ? (
+                      <small className="admin-support-unread-label">
+                        ● 新訊息
+                      </small>
+                    ) : null}
                   </button>
                 ))
               )}

@@ -118,6 +118,8 @@ export default function AdminPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
   const [paymentRequestMessage, setPaymentRequestMessage] = useState("");
+  const [paymentRequestSearch, setPaymentRequestSearch] = useState("");
+  const [selectedPaymentRequestId, setSelectedPaymentRequestId] = useState("");
 
   const handleAuthentication = useCallback(
     (status: number) => {
@@ -278,7 +280,44 @@ export default function AdminPage() {
     setQuery(searchInput.trim());
   }
 
+  function choosePaymentRequest(request: PaymentRequest) {
+    const workspace =
+      workspaces?.items.find(
+        (item) => item.id === request.workspace_id,
+      ) || {
+        id: request.workspace_id,
+        name: request.workspace_name,
+        slug: "",
+        created_at: request.created_at,
+      };
+
+    setSelected(workspace);
+    setTargetPlan(request.requested_plan_code);
+    setSelectedPaymentRequestId(request.id);
+    setPaymentStatus("pending");
+    setPaymentPage(0);
+    setActionMessage(
+      `已選擇 ${
+        request.owner_full_name || request.owner_email
+      } 的 ${request.requested_plan_code} 方案申請。`,
+    );
+
+    window.setTimeout(() => {
+      document
+        .getElementById("admin-billing-actions")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    }, 50);
+  }
+
   async function contactPaymentRequest(requestId: string) {
+    const request = paymentRequests.find(
+      (item) => item.id === requestId,
+    );
+    if (request) choosePaymentRequest(request);
+
     setActionBusy(true);
     setActionMessage("");
 
@@ -313,6 +352,33 @@ export default function AdminPage() {
     event.preventDefault();
     if (!selected) return;
 
+    if (!selectedPaymentRequestId) {
+      setActionMessage(
+        "請先選擇要對應的客戶方案申請，再登錄付款。",
+      );
+      return;
+    }
+
+    const selectedRequest = paymentRequests.find(
+      (request) => request.id === selectedPaymentRequestId,
+    );
+
+    if (
+      !selectedRequest ||
+      selectedRequest.workspace_id !== selected.id ||
+      selectedRequest.requested_plan_code !== targetPlan ||
+      ![
+        "requested",
+        "contacted",
+        "payment_pending",
+      ].includes(selectedRequest.status)
+    ) {
+      setActionMessage(
+        "付款綁定客戶或方案已變更，請重新選擇正確的客戶申請。",
+      );
+      return;
+    }
+
     setActionBusy(true);
     setActionMessage("");
 
@@ -339,7 +405,12 @@ export default function AdminPage() {
 
     setPaymentAmount("");
     setPaymentReference("");
-    setActionMessage("付款紀錄已建立，請在下方確認收款。");
+    setActionMessage(
+      `已為 ${
+        selectedRequest.owner_full_name ||
+        selectedRequest.owner_email
+      } 建立付款紀錄，請在下方確認收款。`,
+    );
     setActionBusy(false);
     setPaymentStatus("pending");
     setPaymentPage(0);
@@ -354,32 +425,39 @@ export default function AdminPage() {
       return;
     }
 
-    const confirmableRequests = paymentRequests.filter(
-      (request) =>
-        request.workspace_id === selected.id &&
-        request.requested_plan_code === targetPlan &&
-        ["contacted", "payment_pending"].includes(request.status),
+    const selectedRequest = paymentRequests.find(
+      (request) => request.id === selectedPaymentRequestId,
     );
 
-    if (confirmableRequests.length === 0) {
+    if (!selectedRequest) {
       setActionMessage(
-        "找不到此 Workspace 可確認的方案申請，請先由客戶提出申請並標記為已聯繫。",
+        "請先從待處理付款申請或客戶方案申請選擇要綁定的客戶。",
       );
       return;
     }
 
-    if (confirmableRequests.length > 1) {
+    if (
+      selectedRequest.workspace_id !== selected.id ||
+      selectedRequest.requested_plan_code !== targetPlan
+    ) {
       setActionMessage(
-        "此方案有多筆可確認申請，為避免誤綁付款，請先整理重複申請。",
+        "選定的客戶申請與目前 Workspace 或方案不一致，請重新選擇。",
       );
       return;
     }
 
-    const paymentRequest = confirmableRequests[0];
-    if (!paymentRequest) {
-      setActionMessage("找不到可綁定的方案申請。");
+    if (
+      !["contacted", "payment_pending"].includes(
+        selectedRequest.status,
+      )
+    ) {
+      setActionMessage(
+        "這筆申請尚未標記為已聯繫，請先按「標記已聯繫」再確認收款。",
+      );
       return;
     }
+
+    const paymentRequest = selectedRequest;
 
     const reason = window.prompt("請輸入確認收款原因：", "已確認收到客戶款項");
     if (!reason?.trim()) return;
@@ -452,6 +530,50 @@ export default function AdminPage() {
       )
     : [];
 
+  const selectedPaymentCandidates = selectedPaymentRequests.filter(
+    (request) =>
+      request.requested_plan_code === targetPlan &&
+      [
+        "requested",
+        "contacted",
+        "payment_pending",
+      ].includes(request.status),
+  );
+
+  const paymentRequestSearchTerm =
+    paymentRequestSearch.trim().toLowerCase();
+
+  const pendingPaymentRequests = paymentRequests.filter(
+    (request) => {
+      if (
+        ![
+          "requested",
+          "contacted",
+          "payment_pending",
+        ].includes(request.status)
+      ) {
+        return false;
+      }
+
+      if (!paymentRequestSearchTerm) return true;
+
+      return [
+        request.owner_full_name,
+        request.owner_email,
+        request.workspace_name,
+        request.requested_plan_code,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(paymentRequestSearchTerm);
+    },
+  );
+
+  const selectedPaymentRequest = paymentRequests.find(
+    (request) => request.id === selectedPaymentRequestId,
+  );
+
   return (
     <main className="admin-shell">
       <aside className="admin-sidebar">
@@ -486,6 +608,99 @@ export default function AdminPage() {
         </header>
 
         {error ? <div className="dashboard-error">{error}</div> : null}
+
+        <section className="admin-card admin-request-queue">
+          <div className="admin-card-heading">
+            <div>
+              <div className="eyebrow">PAYMENT REQUEST QUEUE</div>
+              <h2>待處理付款申請</h2>
+            </div>
+            <span className="admin-queue-count">
+              {pendingPaymentRequests.length}
+            </span>
+          </div>
+
+          <div className="admin-request-queue-tools">
+            <p>
+              先找到正確客戶，再登錄與確認付款。
+            </p>
+            <input
+              aria-label="搜尋付款申請"
+              value={paymentRequestSearch}
+              onChange={(event) =>
+                setPaymentRequestSearch(event.target.value)
+              }
+              placeholder="搜尋客戶、Email、Workspace 或方案"
+            />
+          </div>
+
+          {pendingPaymentRequests.length === 0 ? (
+            <p className="admin-empty">
+              目前沒有符合條件的待處理付款申請。
+            </p>
+          ) : (
+            <div className="admin-table-wrap admin-request-queue-table">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>客戶</th>
+                    <th>Workspace</th>
+                    <th>方案</th>
+                    <th>狀態</th>
+                    <th>申請日期</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingPaymentRequests.map((request) => (
+                    <tr key={request.id}>
+                      <td>
+                        {request.owner_full_name || "—"}<br />
+                        <small>{request.owner_email}</small>
+                      </td>
+                      <td>{request.workspace_name}</td>
+                      <td>{request.requested_plan_code}</td>
+                      <td>
+                        <span className="admin-status">
+                          {request.status}
+                        </span>
+                      </td>
+                      <td>{formatDate(request.created_at)}</td>
+                      <td>
+                        <div className="admin-request-actions">
+                          <button
+                            type="button"
+                            className="admin-secondary-button"
+                            disabled={actionBusy}
+                            onClick={() =>
+                              choosePaymentRequest(request)
+                            }
+                          >
+                            處理此申請
+                          </button>
+                          {request.status === "requested" ? (
+                            <button
+                              type="button"
+                              className="primary-button"
+                              disabled={actionBusy}
+                              onClick={() =>
+                                void contactPaymentRequest(
+                                  request.id,
+                                )
+                              }
+                            >
+                              標記已聯繫
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         <div className="admin-layout">
           <section className="admin-card workspace-browser">
@@ -558,7 +773,10 @@ export default function AdminPage() {
               ) : <p className="admin-empty">{subscriptionMessage || "請從左側選擇 Workspace。"}</p>}
             </section>
 
-            <section className="admin-card">
+            <section
+              className="admin-card"
+              id="admin-billing-actions"
+            >
               <div className="admin-card-heading">
                 <div>
                   <div className="eyebrow">BILLING ACTIONS</div>
@@ -577,9 +795,42 @@ export default function AdminPage() {
                 </label>
                 <label>
                   方案
-                  <select value={targetPlan} onChange={(event) => setTargetPlan(event.target.value)}>
+                  <select
+                    value={targetPlan}
+                    onChange={(event) => {
+                      setTargetPlan(event.target.value);
+                      setSelectedPaymentRequestId("");
+                    }}
+                  >
                     <option value="pro">Pro</option>
                     <option value="business">Business</option>
+                  </select>
+                </label>
+                <label className="admin-request-field">
+                  綁定客戶申請
+                  <select
+                    value={selectedPaymentRequestId}
+                    onChange={(event) =>
+                      setSelectedPaymentRequestId(
+                        event.target.value,
+                      )
+                    }
+                    disabled={!selected || actionBusy}
+                    required
+                  >
+                    <option value="">
+                      {selected
+                        ? "請選擇要綁定的客戶"
+                        : "請先選擇 Workspace"}
+                    </option>
+                    {selectedPaymentCandidates.map((request) => (
+                      <option
+                        key={request.id}
+                        value={request.id}
+                      >
+                        {`${request.owner_full_name || request.owner_email} · ${request.requested_plan_code} · ${request.status} · ${formatDate(request.created_at)}`}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label>
@@ -590,6 +841,19 @@ export default function AdminPage() {
                   登錄付款
                 </button>
               </form>
+
+              <p className="admin-form-hint">
+                {selectedPaymentRequest
+                  ? `目前選定：${
+                      selectedPaymentRequest.owner_full_name ||
+                      selectedPaymentRequest.owner_email
+                    } · ${
+                      selectedPaymentRequest.requested_plan_code
+                    } · ${
+                      selectedPaymentRequest.status
+                    }`
+                  : "同一方案有多筆申請時，請先選擇正確客戶。"}
+              </p>
 
               {actionMessage ? <p className="admin-empty">{actionMessage}</p> : null}
             </section>
@@ -631,16 +895,38 @@ export default function AdminPage() {
                           </td>
                           <td>{formatDate(request.created_at)}</td>
                           <td>
-                            {request.status === "requested" ? (
-                              <button
-                                type="button"
-                                className="primary-button"
-                                disabled={actionBusy}
-                                onClick={() => void contactPaymentRequest(request.id)}
-                              >
-                                已聯繫
-                              </button>
-                            ) : "—"}
+                            <div className="admin-request-actions">
+                              {[
+                                "requested",
+                                "contacted",
+                                "payment_pending",
+                              ].includes(request.status) ? (
+                                <button
+                                  type="button"
+                                  className="admin-secondary-button"
+                                  disabled={actionBusy}
+                                  onClick={() =>
+                                    choosePaymentRequest(request)
+                                  }
+                                >
+                                  選此客戶
+                                </button>
+                              ) : null}
+                              {request.status === "requested" ? (
+                                <button
+                                  type="button"
+                                  className="primary-button"
+                                  disabled={actionBusy}
+                                  onClick={() =>
+                                    void contactPaymentRequest(
+                                      request.id,
+                                    )
+                                  }
+                                >
+                                  標記已聯繫
+                                </button>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       ))}
