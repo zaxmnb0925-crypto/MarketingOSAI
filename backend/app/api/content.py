@@ -257,6 +257,11 @@ async def preview_content(
         platform=payload.platform,
         topic=payload.topic,
         objective=payload.objective,
+        audience=payload.audience,
+        tone=payload.tone,
+        content_length=payload.content_length,
+        call_to_action=payload.call_to_action,
+        keywords=payload.keywords,
     )
 
     user_input_text = " ".join(
@@ -264,6 +269,10 @@ async def preview_content(
         for item in [
             payload.topic,
             payload.objective,
+            payload.audience,
+            payload.tone,
+            payload.call_to_action,
+            payload.keywords,
         ]
         if item
     )
@@ -375,6 +384,10 @@ async def generate_content(
         for item in [
             payload.topic,
             payload.objective,
+            payload.audience,
+            payload.tone,
+            payload.call_to_action,
+            payload.keywords,
         ]
         if item
     )
@@ -405,6 +418,11 @@ async def generate_content(
         platform=payload.platform,
         topic=payload.topic,
         objective=payload.objective,
+        audience=payload.audience,
+        tone=payload.tone,
+        content_length=payload.content_length,
+        call_to_action=payload.call_to_action,
+        keywords=payload.keywords,
     )
 
     try:

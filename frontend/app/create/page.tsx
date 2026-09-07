@@ -46,6 +46,22 @@ type GenerateResponse = {
   forbidden_word_hits: string[];
 };
 
+const OBJECTIVE_PRESETS = [
+  "提高社群互動",
+  "介紹新品或服務",
+  "導向預約或購買",
+  "建立品牌信任",
+] as const;
+
+const TONE_OPTIONS = [
+  { value: "", label: "沿用品牌語氣" },
+  { value: "親切自然", label: "親切自然" },
+  { value: "專業可信", label: "專業可信" },
+  { value: "活潑有活力", label: "活潑有活力" },
+  { value: "溫暖故事感", label: "溫暖故事感" },
+  { value: "簡潔有力", label: "簡潔有力" },
+] as const;
+
 export default function CreatePage() {
   const router = useRouter();
 
@@ -67,6 +83,21 @@ export default function CreatePage() {
   const [objective, setObjective] =
     useState("");
 
+  const [audience, setAudience] =
+    useState("");
+
+  const [tone, setTone] =
+    useState("");
+
+  const [contentLength, setContentLength] =
+    useState("standard");
+
+  const [callToAction, setCallToAction] =
+    useState("");
+
+  const [keywords, setKeywords] =
+    useState("");
+
   const [result, setResult] =
     useState<GenerateResponse | null>(null);
 
@@ -78,6 +109,12 @@ export default function CreatePage() {
 
   const [error, setError] =
     useState("");
+
+  const [editableContent, setEditableContent] =
+    useState("");
+
+  const [copied, setCopied] =
+    useState(false);
 
 
   useEffect(() => {
@@ -172,6 +209,8 @@ export default function CreatePage() {
     setGenerating(true);
     setError("");
     setResult(null);
+    setEditableContent("");
+    setCopied(false);
 
     try {
       const response =
@@ -187,7 +226,17 @@ export default function CreatePage() {
               platform,
               topic,
               objective:
-                objective || null,
+                objective.trim() || null,
+              audience:
+                audience.trim() || null,
+              tone:
+                tone || null,
+              content_length:
+                contentLength,
+              call_to_action:
+                callToAction.trim() || null,
+              keywords:
+                keywords.trim() || null,
             }),
           },
         );
@@ -220,12 +269,44 @@ export default function CreatePage() {
       }
 
       setResult(data);
+      setEditableContent(
+        data.generation.generated_content || "",
+      );
+      setCopied(false);
     } catch {
       setError(
         "目前無法連線至 AI 生成服務。",
       );
     } finally {
       setGenerating(false);
+    }
+  }
+
+
+  async function copyGenerated() {
+    if (!editableContent.trim()) return;
+
+    try {
+      await navigator.clipboard.writeText(
+        editableContent,
+      );
+      setCopied(true);
+      window.setTimeout(
+        () => setCopied(false),
+        1600,
+      );
+    } catch {
+      setCopied(false);
+    }
+  }
+
+
+  function regenerate() {
+    const form =
+      document.getElementById("ai-creator-form");
+
+    if (form instanceof HTMLFormElement) {
+      form.requestSubmit();
     }
   }
 
@@ -336,6 +417,7 @@ export default function CreatePage() {
 
         <div className="creator-layout">
           <form
+            id="ai-creator-form"
             className="creator-panel"
             onSubmit={generate}
           >
@@ -399,6 +481,10 @@ export default function CreatePage() {
                 <option value="x">
                   X
                 </option>
+
+                <option value="google_business">
+                  Google 商家
+                </option>
               </select>
             </div>
 
@@ -421,6 +507,44 @@ export default function CreatePage() {
             </div>
 
 
+            <div className="creator-brief-header">
+              <div>
+                <div className="eyebrow">
+                  CREATIVE BRIEF
+                </div>
+
+                <strong>
+                  讓 AI 更貼近你的需求
+                </strong>
+              </div>
+
+              <span className="field-help">
+                選填，會套用品牌規範
+              </span>
+            </div>
+
+            <div
+              className="creator-preset-row"
+              aria-label="快速套用行銷目的"
+            >
+              {OBJECTIVE_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={
+                    objective === preset
+                      ? "creator-preset-button active"
+                      : "creator-preset-button"
+                  }
+                  onClick={() =>
+                    setObjective(preset)
+                  }
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+
             <div className="form-group">
               <label>
                 行銷目的
@@ -434,8 +558,115 @@ export default function CreatePage() {
                   )
                 }
                 placeholder="例如：提升品牌互動並介紹新品"
-                rows={5}
+                maxLength={300}
+                rows={3}
               />
+            </div>
+
+            <div className="creator-brief-grid">
+              <div className="form-group">
+                <label>
+                  目標客群
+                </label>
+
+                <input
+                  value={audience}
+                  onChange={(event) =>
+                    setAudience(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="例如：台灣 25–40 歲上班族"
+                  maxLength={200}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>
+                  內容語氣
+                </label>
+
+                <select
+                  value={tone}
+                  onChange={(event) =>
+                    setTone(event.target.value)
+                  }
+                >
+                  {TONE_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  內容篇幅
+                </label>
+
+                <select
+                  value={contentLength}
+                  onChange={(event) =>
+                    setContentLength(
+                      event.target.value,
+                    )
+                  }
+                >
+                  <option value="short">
+                    精簡
+                  </option>
+
+                  <option value="standard">
+                    標準
+                  </option>
+
+                  <option value="long">
+                    完整
+                  </option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  行動呼籲 CTA
+                </label>
+
+                <input
+                  value={callToAction}
+                  onChange={(event) =>
+                    setCallToAction(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="例如：立即預約諮詢"
+                  maxLength={200}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>
+                必帶關鍵字
+              </label>
+
+              <input
+                value={keywords}
+                onChange={(event) =>
+                  setKeywords(
+                    event.target.value,
+                  )
+                }
+                placeholder="用逗號分隔，例如：手沖咖啡,台北,新品"
+                maxLength={300}
+              />
+
+              <span className="field-help">
+                AI 會自然融入，不會硬塞關鍵字。
+              </span>
             </div>
 
 
@@ -484,30 +715,50 @@ export default function CreatePage() {
             </div>
 
 
-            {result?.generation
-              .generated_content ? (
+            {editableContent ? (
               <>
-                <div className="generated-content">
-                  {
-                    result.generation
-                      .generated_content
+                <textarea
+                  className="generated-content-editor"
+                  value={editableContent}
+                  onChange={(event) =>
+                    setEditableContent(
+                      event.target.value,
+                    )
                   }
+                  aria-label="AI 生成內容"
+                />
+
+                <div className="result-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={copyGenerated}
+                  >
+                    {copied
+                      ? "已複製"
+                      : "複製文案"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={regenerate}
+                    disabled={generating}
+                  >
+                    {generating
+                      ? "重新生成中..."
+                      : "重新生成"}
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() =>
-                    navigator.clipboard
-                      .writeText(
-                        result.generation
-                          .generated_content ||
-                          "",
-                      )
-                  }
-                >
-                  複製文案
-                </button>
+                {result &&
+                result.forbidden_word_hits.length > 0 ? (
+                  <div className="policy-warning">
+                    已偵測品牌禁用詞：
+                    {" "}
+                    {result.forbidden_word_hits.join("、")}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="result-empty">
@@ -518,7 +769,7 @@ export default function CreatePage() {
 
                   <p>
                     選擇品牌、平台並輸入主題，
-                    AI 生成結果會顯示在這裡。
+                    再補充創作簡報，AI 會產生更精準的文案。
                   </p>
                 </div>
               </div>

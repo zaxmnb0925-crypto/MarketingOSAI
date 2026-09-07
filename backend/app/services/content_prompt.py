@@ -2,6 +2,8 @@ from app.models.brand import Brand
 from app.models.content_generation import ContentPlatform
 
 
+# R23 AI prompt quality controls
+
 PLATFORM_RULES = {
     ContentPlatform.facebook: (
         "適合 Facebook；內容清楚、有敘事感，可適度加入 CTA。"
@@ -26,6 +28,12 @@ PLATFORM_RULES = {
     ),
 }
 
+CONTENT_LENGTH_RULES = {
+    "short": "精簡，約 50–100 字",
+    "standard": "標準，約 100–220 字",
+    "long": "完整，約 220–400 字",
+}
+
 
 def clean(value: str | None) -> str:
     return value.strip() if value else "未設定"
@@ -36,7 +44,17 @@ def build_brand_prompt(
     platform: ContentPlatform,
     topic: str,
     objective: str | None,
+    audience: str | None = None,
+    tone: str | None = None,
+    content_length: str | None = None,
+    call_to_action: str | None = None,
+    keywords: str | None = None,
 ) -> str:
+
+    requested_length = CONTENT_LENGTH_RULES.get(
+        (content_length or "standard").strip().lower(),
+        CONTENT_LENGTH_RULES["standard"],
+    )
 
     return f"""你是一位專業品牌社群內容編輯。
 
@@ -68,13 +86,21 @@ def build_brand_prompt(
 主題：{topic.strip()}
 目的：{clean(objective)}
 
+【本次創作控制】
+目標客群：{clean(audience)}
+指定語氣：{clean(tone or "沿用品牌語氣")}
+內容篇幅：{requested_length}
+指定 CTA：{clean(call_to_action)}
+必帶關鍵字：{clean(keywords)}
+
 【輸出要求】
-1. 使用品牌指定語言。
-2. 遵守品牌語氣與品牌規範。
-3. 不得出現禁止詞彙。
-4. 不得捏造價格、優惠、成效、客戶證言或事實。
-5. 若資料不足，不得自行虛構。
-6. 只輸出可發布的社群文案正文。
+1. 使用品牌指定語言；若為繁體中文，使用台灣繁體中文。
+2. 先寫出符合平台的開頭 hook，再自然展開內容。
+3. 遵守品牌語氣、品牌規範、目標客群與篇幅要求。
+4. CTA 只有在指定或品牌預設 CTA 有資料時才能使用。
+5. 關鍵字要自然融入，不可硬塞；沒有資料不得虛構。
+6. 不得出現禁止詞彙或捏造價格、優惠、成效、客戶證言、連結或事實。
+7. 只輸出可直接發布的社群文案正文，不要輸出分析或欄位說明。
 """.strip()
 
 

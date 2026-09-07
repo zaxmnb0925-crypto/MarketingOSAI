@@ -37,6 +37,31 @@ class ContentPreviewRequest(BaseModel):
         max_length=300,
     )
 
+    audience: str | None = Field(
+        default=None,
+        max_length=200,
+    )
+
+    tone: str | None = Field(
+        default=None,
+        max_length=100,
+    )
+
+    content_length: str | None = Field(
+        default="standard",
+        max_length=20,
+    )
+
+    call_to_action: str | None = Field(
+        default=None,
+        max_length=200,
+    )
+
+    keywords: str | None = Field(
+        default=None,
+        max_length=300,
+    )
+
 
 class ContentGenerationResponse(BaseModel):
     id: UUID
