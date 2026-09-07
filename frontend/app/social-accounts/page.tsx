@@ -218,7 +218,7 @@ export default function SocialAccountsPage() {
       <section className="dashboard-main">
         <header className="dashboard-header">
           <div>
-            <div className="eyebrow">CHANNEL CONNECTIONS</div>
+            <div className="eyebrow">社群帳號連線</div>
             <h1>社群帳號</h1>
             <p>{workspace.name} · 管理社群發布帳號</p>
           </div>
@@ -235,7 +235,7 @@ export default function SocialAccountsPage() {
         <section className="dashboard-panel vertical">
           <div className="social-account-toolbar">
             <div>
-              <div className="eyebrow">ACCOUNT CONNECTIONS</div>
+              <div className="eyebrow">帳號連線</div>
               <h2>已連接帳號</h2>
               <p>
                 連接後才能建立發布草稿；實際發布仍需人工確認。
@@ -322,7 +322,7 @@ export default function SocialAccountsPage() {
         </section>
 
         <section className="dashboard-panel vertical">
-          <div className="eyebrow">PUBLISHING SAFETY</div>
+          <div className="eyebrow">發布安全</div>
           <h2>發布流程</h2>
           <p>
             連接帳號 → 建立發布草稿 → 送審與 dry-run
