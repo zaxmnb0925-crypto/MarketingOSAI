@@ -69,15 +69,7 @@ async def create_payment_request(
             detail="Free plan is already included",
         )
 
-    if (
-        subscription.status == "active"
-        and subscription.plan_code == plan_code
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Workspace is already on this plan",
-        )
-
+    # An active same-plan request is a renewal and is allowed.
     duplicate_result = await db.execute(
         select(PaymentRequest).where(
             PaymentRequest.workspace_id == workspace_id,
@@ -88,7 +80,7 @@ async def create_payment_request(
         )
     )
 
-    if duplicate_result.first() is not None:
+    if duplicate_result.scalars().first() is not None:
         from fastapi import HTTPException
 
         raise HTTPException(
