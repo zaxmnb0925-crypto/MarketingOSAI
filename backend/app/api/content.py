@@ -624,6 +624,69 @@ async def generate_content(
     )
 
 
+@router.post(
+    "/{generation_id}/draft",
+    response_model=CustomerContentGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def clone_content_generation_as_draft(
+    workspace_id: UUID,
+    brand_id: UUID,
+    generation_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_write(
+        db,
+        current_user,
+        workspace_id,
+    )
+
+    source = await db.scalar(
+        select(ContentGeneration).where(
+            ContentGeneration.id == generation_id,
+            ContentGeneration.workspace_id == workspace_id,
+            ContentGeneration.brand_id == brand_id,
+            ContentGeneration.status.in_(
+                [
+                    ContentStatus.completed,
+                    ContentStatus.draft,
+                ]
+            ),
+        )
+    )
+
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation not found",
+        )
+
+    if not source.generated_content:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Generation has no editable content",
+        )
+
+    draft = ContentGeneration(
+        workspace_id=workspace_id,
+        brand_id=brand_id,
+        user_id=current_user.id,
+        platform=source.platform,
+        topic=source.topic,
+        objective=source.objective,
+        status=ContentStatus.draft,
+        prompt=source.prompt,
+        generated_content=source.generated_content,
+    )
+
+    db.add(draft)
+    await db.commit()
+    await db.refresh(draft)
+
+    return serialize_customer_generation(draft)
+
+
 @router.patch(
     "/{generation_id}",
     response_model=CustomerContentGenerationResponse,

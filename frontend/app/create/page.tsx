@@ -176,12 +176,87 @@ export default function CreatePage() {
 
         setBrands(brandData);
 
-        if (
-          brandData.length > 0
-        ) {
-          setBrandId(
-            brandData[0].id,
+        const query =
+          new URLSearchParams(
+            window.location.search,
           );
+
+        const requestedBrandId =
+          query.get("brandId");
+
+        const initialBrand =
+          brandData.find(
+            (brand) =>
+              brand.id === requestedBrandId,
+          ) || brandData[0];
+
+        if (initialBrand) {
+          setBrandId(initialBrand.id);
+        }
+
+        const requestedGenerationId =
+          query.get("generationId");
+
+        if (
+          initialBrand &&
+          requestedGenerationId
+        ) {
+          const draftResponse =
+            await fetch(
+              `/api/workspaces/${currentWorkspace.id}/brands/${initialBrand.id}/content/${requestedGenerationId}/draft`,
+              {
+                method: "POST",
+              },
+            );
+
+          const draftData =
+            await draftResponse.json().catch(
+              () => null,
+            );
+
+          if (
+            !draftResponse.ok ||
+            !draftData?.id
+          ) {
+            setError(
+              "無法載入歷史草稿。",
+            );
+          } else {
+            setPlatform(
+              draftData.platform ||
+                "instagram",
+            );
+            setTopic(
+              draftData.topic || "",
+            );
+            setObjective(
+              draftData.objective || "",
+            );
+            setResult({
+              generation: {
+                id: draftData.id,
+                status:
+                  draftData.status ||
+                  "draft",
+                generated_content:
+                  draftData.generated_content ||
+                  "",
+              },
+              forbidden_word_hits: [],
+            });
+            setEditableContent(
+              draftData.generated_content ||
+                "",
+            );
+            setSaveMessage(
+              "已從歷史紀錄建立新的草稿副本。",
+            );
+            window.history.replaceState(
+              null,
+              "",
+              "/create",
+            );
+          }
         }
       } catch {
         setError(

@@ -17,6 +17,9 @@ type HistoryItemCardProps = {
   copyContent: (
     content: string,
   ) => Promise<void>;
+  openInEditor: (
+    item: ContentItem,
+  ) => void;
 };
 
 export function HistoryItemCard({
@@ -24,6 +27,7 @@ export function HistoryItemCard({
   expanded,
   setExpandedId,
   copyContent,
+  openInEditor,
 }: HistoryItemCardProps) {
   return (
 <article
@@ -67,8 +71,10 @@ export function HistoryItemCard({
                       </div>
                     </div>
 
-                    {item.status ===
-                      "completed" &&
+                    {(item.status ===
+                      "completed" ||
+                      item.status ===
+                        "draft") &&
                     item.generated_content ? (
                       <>
                         <div
@@ -112,6 +118,16 @@ export function HistoryItemCard({
                           >
                             複製文案
                           </button>
+
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() =>
+                              openInEditor(item)
+                            }
+                          >
+                            載入編輯器
+                          </button>
                         </div>
                       </>
                     ) : null}
@@ -136,7 +152,7 @@ export function HistoryItemCard({
                       "draft" ? (
                       <div className="history-draft-box">
                         這是一筆草稿，
-                        尚未完成 AI 生成。
+                        可載入編輯器繼續修改。
                       </div>
                     ) : null}
                   </article>

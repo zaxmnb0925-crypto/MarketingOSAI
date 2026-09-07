@@ -16,6 +16,9 @@ type HistoryListProps = {
   copyContent: (
     content: string,
   ) => Promise<void>;
+  openInEditor: (
+    item: ContentItem,
+  ) => void;
 };
 
 export function HistoryList({
@@ -24,6 +27,7 @@ export function HistoryList({
   expandedId,
   setExpandedId,
   copyContent,
+  openInEditor,
 }: HistoryListProps) {
   return (
 <section className="history-list">
@@ -50,6 +54,7 @@ export function HistoryList({
                     expanded={expanded}
                     setExpandedId={setExpandedId}
                     copyContent={copyContent}
+                    openInEditor={openInEditor}
                   />
                 );
               },

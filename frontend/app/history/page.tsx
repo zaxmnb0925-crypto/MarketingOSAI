@@ -233,6 +233,19 @@ export default function HistoryPage() {
     );
   }
 
+  function openInEditor(item: ContentItem) {
+    if (!item.generated_content) return;
+
+    router.push(
+      `/create?generationId=${encodeURIComponent(
+        item.id,
+      )}&brandId=${encodeURIComponent(
+        item.brand_id,
+      )}`,
+    );
+  }
+
+
   async function logout() {
     await fetch(
       "/api/auth/logout",
@@ -362,6 +375,7 @@ export default function HistoryPage() {
           expandedId={expandedId}
           setExpandedId={setExpandedId}
           copyContent={copyContent}
+          openInEditor={openInEditor}
         />
       </section>
     </main>
