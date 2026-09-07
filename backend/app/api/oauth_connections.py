@@ -16,6 +16,13 @@ from app.api.workspace_access import require_workspace_write
 from app.core.config import settings
 from app.core.request_context import get_request_id
 from app.core.database import get_db
+from app.models.social_account import (
+    SocialAccount,
+    SocialPlatform,
+)
+from app.models.subscription import (
+    WorkspaceSubscription,
+)
 from app.models.user import User
 from app.schemas.oauth_connection import (
     OAuthCallbackResponse,
@@ -37,6 +44,12 @@ from app.services.meta_oauth import (
     get_meta_managed_pages,
     get_meta_user_identity,
 )
+from app.services.entitlements import (
+    SOCIAL_ACCOUNTS_MAX_KEY,
+    EntitlementCapacityExceeded,
+    EntitlementUnavailable,
+    require_capacity,
+)
 from app.services.social_account_connection import (
     upsert_meta_page_connections,
 )
@@ -53,6 +66,74 @@ from app.services.oauth_state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _require_social_asset_capacity(
+    db: AsyncSession,
+    workspace_id: UUID,
+    pages: tuple[MetaManagedPage, ...],
+) -> None:
+    # Serialize OAuth callbacks for this workspace so two
+    # concurrent callbacks cannot consume the same slots.
+    lock_result = await db.execute(
+        select(WorkspaceSubscription.workspace_id)
+        .where(
+            WorkspaceSubscription.workspace_id
+            == workspace_id
+        )
+        .with_for_update()
+    )
+
+    if lock_result.scalar_one_or_none() is None:
+        raise EntitlementUnavailable(
+            "Subscription is unavailable"
+        )
+
+    existing_result = await db.execute(
+        select(
+            SocialAccount.platform,
+            SocialAccount.platform_account_id,
+        )
+        .where(
+            SocialAccount.workspace_id
+            == workspace_id,
+            SocialAccount.is_active.is_(True),
+            SocialAccount.platform_account_id.is_not(None),
+        )
+    )
+
+    existing_assets = {
+        (
+            getattr(platform, "value", str(platform)),
+            str(platform_account_id),
+        )
+        for platform, platform_account_id
+        in existing_result.all()
+    }
+
+    incoming_assets = {
+        (
+            SocialPlatform.facebook.value,
+            page.id,
+        )
+        for page in pages
+        if page.id
+    }
+
+    new_asset_count = len(
+        incoming_assets - existing_assets
+    )
+
+    if new_asset_count < 1:
+        return
+
+    await require_capacity(
+        db,
+        workspace_id,
+        SOCIAL_ACCOUNTS_MAX_KEY,
+        len(existing_assets),
+        requested=new_asset_count,
+    )
 
 
 router = APIRouter(
@@ -319,6 +400,33 @@ async def oauth_callback(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(
                 "Meta permission verification failed"
+            ),
+        ) from exc
+
+    try:
+        await _require_social_asset_capacity(
+            db,
+            payload.workspace_id,
+            tuple(managed_pages),
+        )
+    except EntitlementCapacityExceeded as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "目前方案的社群資產綁定數量已達上限；"
+                "請先解除既有帳號或升級方案。"
+            ),
+        ) from exc
+    except EntitlementUnavailable as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "目前無法確認方案的社群資產上限，"
+                "請稍後再試。"
             ),
         ) from exc
 

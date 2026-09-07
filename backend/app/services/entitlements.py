@@ -12,6 +12,8 @@ from app.models.subscription import (
 )
 
 
+SOCIAL_ACCOUNTS_MAX_KEY = "social_accounts.max"
+
 UNLIMITED_FAIR_USE = None
 
 
