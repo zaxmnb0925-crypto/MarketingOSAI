@@ -75,3 +75,11 @@ class SocialAccountResponse(
     model_config = {
         "from_attributes": True,
     }
+
+
+
+class SocialAccountQuotaResponse(BaseModel):
+    plan_code: str
+    used: int
+    limit: int | None = None
+    remaining: int | None = None

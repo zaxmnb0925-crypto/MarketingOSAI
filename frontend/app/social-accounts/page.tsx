@@ -24,12 +24,25 @@ type SocialAccount = {
   last_error?: string | null;
 };
 
+type SocialAccountQuota = {
+  plan_code: string;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+};
+
 const platformLabels: Record<string, string> = {
   facebook: "臉書粉絲專頁",
   instagram: "Instagram",
   threads: "Threads",
   linkedin: "LinkedIn",
   x: "X",
+};
+
+const planLabels: Record<string, string> = {
+  free: "Free",
+  pro: "Pro",
+  business: "Business",
 };
 
 const statusLabels: Record<string, string> = {
@@ -53,6 +66,32 @@ function getDetail(data: unknown, fallback: string): string {
   return fallback;
 }
 
+function isSocialAccountQuota(
+  data: unknown,
+): data is SocialAccountQuota {
+  if (
+    typeof data !== "object" ||
+    data === null
+  ) {
+    return false;
+  }
+
+  const candidate = data as Record<string, unknown>;
+
+  return (
+    typeof candidate.plan_code === "string" &&
+    typeof candidate.used === "number" &&
+    (
+      candidate.limit === null ||
+      typeof candidate.limit === "number"
+    ) &&
+    (
+      candidate.remaining === null ||
+      typeof candidate.remaining === "number"
+    )
+  );
+}
+
 function formatDate(value?: string | null): string {
   if (!value) return "—";
 
@@ -68,14 +107,19 @@ export default function SocialAccountsPage() {
   const router = useRouter();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [quota, setQuota] =
+    useState<SocialAccountQuota | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [quotaError, setQuotaError] = useState("");
 
   async function loadPage() {
     setLoading(true);
     setError("");
+    setQuota(null);
+    setQuotaError("");
 
     try {
       const meResponse = await fetch("/api/auth/me", {
@@ -118,6 +162,32 @@ export default function SocialAccountsPage() {
       }
 
       setAccounts(accountData as SocialAccount[]);
+
+      const quotaResponse = await fetch(
+        `/api/workspaces/${encodeURIComponent(currentWorkspace.id)}/social-accounts/quota`,
+        { cache: "no-store" },
+      );
+      const quotaData = await quotaResponse.json().catch(
+        () => null,
+      );
+
+      if (quotaResponse.status === 401) {
+        router.replace("/login");
+        return;
+      }
+
+      if (!quotaResponse.ok) {
+        setQuotaError(
+          getDetail(
+            quotaData,
+            "目前無法載入社群帳號額度。",
+          ),
+        );
+      } else if (!isSocialAccountQuota(quotaData)) {
+        setQuotaError("社群帳號額度回應格式錯誤。");
+      } else {
+        setQuota(quotaData);
+      }
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -231,6 +301,68 @@ export default function SocialAccountsPage() {
         {notice ? (
           <div className="dashboard-notice">{notice}</div>
         ) : null}
+
+        <section className="dashboard-panel vertical">
+          <div className="social-account-toolbar">
+            <div>
+              <div className="eyebrow">方案額度</div>
+              <h2>社群資產綁定額度</h2>
+              <p>
+                目前方案可綁定的社群帳號數量。
+              </p>
+            </div>
+          </div>
+
+          {quota ? (
+            <div className="social-account-grid">
+              <article className="social-account-card">
+                <div className="social-account-card-header">
+                  <div>
+                    <div className="eyebrow">目前方案</div>
+                    <h3>
+                      {planLabels[quota.plan_code] ||
+                        quota.plan_code}
+                    </h3>
+                  </div>
+                  <span className="social-account-status">
+                    {quota.limit === null
+                      ? "彈性使用"
+                      : `上限 ${quota.limit} 組`}
+                  </span>
+                </div>
+
+                <p>
+                  {quota.limit === null
+                    ? `已使用 ${quota.used} 組（無固定上限）`
+                    : `已使用 ${quota.used} / ${quota.limit} 組`}
+                </p>
+                <p>
+                  剩餘：
+                  {quota.remaining === null
+                    ? "不設固定上限"
+                    : `${quota.remaining} 組`}
+                </p>
+                <p>
+                  額度只計算目前啟用中的社群資產。
+                </p>
+
+                {quota.limit !== null &&
+                quota.remaining === 0 ? (
+                  <p className="social-account-error">
+                    目前方案額度已用滿；請先解除既有帳號
+                    或升級方案。
+                  </p>
+                ) : null}
+              </article>
+            </div>
+          ) : quotaError ? (
+            <div className="dashboard-error">
+              {quotaError}
+            </div>
+          ) : (
+            <p>載入方案額度中...</p>
+          )}
+        </section>
 
         <section className="dashboard-panel vertical">
           <div className="social-account-toolbar">

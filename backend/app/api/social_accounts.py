@@ -21,8 +21,14 @@ from app.models.brand import Brand
 from app.models.social_account import SocialAccount
 from app.models.user import User
 from app.schemas.social_account import (
+    SocialAccountQuotaResponse,
     SocialAccountResponse,
     SocialAccountUpdate,
+)
+from app.services.entitlements import (
+    SOCIAL_ACCOUNTS_MAX_KEY,
+    EntitlementUnavailable,
+    get_effective_entitlements,
 )
 
 
@@ -119,6 +125,98 @@ async def list_social_accounts(
 
     return list(
         result.scalars().all()
+    )
+
+
+@router.get(
+    "/quota",
+    response_model=SocialAccountQuotaResponse,
+)
+async def get_social_account_quota(
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_workspace_membership(
+        db,
+        current_user,
+        workspace_id,
+    )
+
+    try:
+        effective = await get_effective_entitlements(
+            db,
+            workspace_id,
+        )
+        limit = effective.get_required(
+            SOCIAL_ACCOUNTS_MAX_KEY
+        )
+    except EntitlementUnavailable as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "目前無法確認方案的社群資產上限，"
+                "請稍後再試。"
+            ),
+        ) from exc
+
+    if (
+        limit is not None
+        and (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit < 0
+        )
+    ):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "目前無法確認方案的社群資產上限，"
+                "請稍後再試。"
+            ),
+        )
+
+    result = await db.execute(
+        select(
+            SocialAccount.platform,
+            SocialAccount.platform_account_id,
+        ).where(
+            SocialAccount.workspace_id
+            == workspace_id,
+            SocialAccount.is_active.is_(True),
+            SocialAccount.platform_account_id.is_not(
+                None
+            ),
+        )
+    )
+
+    active_assets = {
+        (
+            getattr(platform, "value", str(platform)),
+            str(platform_account_id),
+        )
+        for platform, platform_account_id
+        in result.all()
+    }
+
+    used = len(active_assets)
+    remaining = (
+        None
+        if limit is None
+        else max(limit - used, 0)
+    )
+
+    return SocialAccountQuotaResponse(
+        plan_code=effective.plan_code,
+        used=used,
+        limit=limit,
+        remaining=remaining,
     )
 
 
