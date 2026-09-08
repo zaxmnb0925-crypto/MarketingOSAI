@@ -137,6 +137,55 @@ async def _require_social_asset_capacity(
     )
 
 
+
+async def _require_existing_social_asset_capacity(
+    db: AsyncSession,
+    workspace_id: UUID,
+) -> None:
+    lock_result = await db.execute(
+        select(WorkspaceSubscription.workspace_id)
+        .where(
+            WorkspaceSubscription.workspace_id
+            == workspace_id
+        )
+        .with_for_update()
+    )
+
+    if lock_result.scalar_one_or_none() is None:
+        raise EntitlementUnavailable(
+            "Subscription is unavailable"
+        )
+
+    existing_result = await db.execute(
+        select(
+            SocialAccount.platform,
+            SocialAccount.platform_account_id,
+        )
+        .where(
+            SocialAccount.workspace_id
+            == workspace_id,
+            SocialAccount.is_active.is_(True),
+            SocialAccount.platform_account_id.is_not(None),
+        )
+    )
+
+    existing_assets = {
+        (
+            getattr(platform, "value", str(platform)),
+            str(platform_account_id),
+        )
+        for platform, platform_account_id
+        in existing_result.all()
+    }
+
+    await require_capacity(
+        db,
+        workspace_id,
+        SOCIAL_ACCOUNTS_MAX_KEY,
+        len(existing_assets),
+        requested=1,
+    )
+
 router = APIRouter(
     tags=["oauth-connections"],
 )
@@ -166,6 +215,30 @@ async def connect_oauth_provider(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
+        ) from exc
+
+    try:
+        await _require_existing_social_asset_capacity(
+            db,
+            workspace_id,
+        )
+    except EntitlementCapacityExceeded as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "目前方案的社群資產綁定數量已達上限；"
+                "請先解除既有帳號或升級方案。"
+            ),
+        ) from exc
+    except EntitlementUnavailable as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "目前無法確認方案的社群資產上限，"
+                "請稍後再試。"
+            ),
         ) from exc
 
     state_value = await create_oauth_state_v2(
