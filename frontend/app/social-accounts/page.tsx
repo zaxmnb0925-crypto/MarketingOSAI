@@ -350,8 +350,7 @@ export default function SocialAccountsPage() {
                 {quota.limit !== null &&
                 quota.remaining === 0 ? (
                   <p className="social-account-error">
-                    目前方案額度已用滿；請先解除既有帳號
-                    或升級方案。
+                    目前方案額度已用滿，目前無法使用更多社群帳號。
                   </p>
                 ) : null}
               </article>
@@ -388,9 +387,13 @@ export default function SocialAccountsPage() {
                 className="dashboard-action"
                 type="button"
                 onClick={() => void connectMeta()}
-                disabled={connecting}
+                disabled={connecting || quota?.remaining === 0}
               >
-                {connecting ? "準備授權中..." : "連接 Meta"}
+                {connecting
+                  ? "準備授權中..."
+                  : quota?.remaining === 0
+                    ? "目前無法使用"
+                    : "連接 Meta"}
               </button>
             </div>
           </div>
@@ -407,11 +410,13 @@ export default function SocialAccountsPage() {
                 className="dashboard-action"
                 type="button"
                 onClick={() => void connectMeta()}
-                disabled={connecting}
+                disabled={connecting || quota?.remaining === 0}
               >
                 {connecting
                   ? "準備授權中..."
-                  : "連接 Facebook / Instagram"}
+                  : quota?.remaining === 0
+                    ? "目前無法使用"
+                    : "連接 Facebook / Instagram"}
               </button>
             </div>
           ) : (

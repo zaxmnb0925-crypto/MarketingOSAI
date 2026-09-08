@@ -228,7 +228,7 @@ async def connect_oauth_provider(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 "目前方案的社群資產綁定數量已達上限；"
-                "請先解除既有帳號或升級方案。"
+                "目前無法使用更多社群帳號。"
             ),
         ) from exc
     except EntitlementUnavailable as exc:
@@ -489,7 +489,7 @@ async def oauth_callback(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 "目前方案的社群資產綁定數量已達上限；"
-                "請先解除既有帳號或升級方案。"
+                "目前無法使用更多社群帳號。"
             ),
         ) from exc
     except EntitlementUnavailable as exc:
