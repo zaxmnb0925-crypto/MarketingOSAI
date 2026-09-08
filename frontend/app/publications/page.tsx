@@ -157,6 +157,7 @@ export default function PublicationsPage() {
             <a className="nav-item" href="/governance">品質治理</a>
             <a className="nav-item" href="/billing">方案與帳務</a>
             <a className="nav-item active" href="/publications">發布紀錄</a>
+            <a className="nav-item" href="/publications/draft">建立發布草稿</a>
             <a className="nav-item" href="/social-accounts">社群帳號</a>
           </nav>
         </div>
