@@ -37,6 +37,7 @@ from app.services.meta_permissions import (
     verify_meta_managed_pages_for_publishing,
 )
 from app.services.meta_oauth import (
+    MetaManagedPage,
     MetaOAuthExchangeError,
     MetaOAuthIdentityError,
     MetaOAuthPageDiscoveryError,
