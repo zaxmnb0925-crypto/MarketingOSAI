@@ -276,6 +276,7 @@ export default function SocialAccountsPage() {
             <a className="nav-item" href="/history">內容歷史</a>
             <a className="nav-item" href="/governance">品質治理</a>
             <a className="nav-item" href="/billing">方案與帳務</a>
+            <a className="nav-item" href="/publications">發布紀錄</a>
             <a className="nav-item active" href="/social-accounts">社群帳號</a>
           </nav>
         </div>

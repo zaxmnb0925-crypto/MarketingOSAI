@@ -318,6 +318,7 @@ export default function HistoryPage() {
               發布排程
             </span>
 
+            <a className="nav-item" href="/publications">發布紀錄</a>
             <a className="nav-item" href="/social-accounts">社群帳號</a>
           </nav>
         </div>
