@@ -34,6 +34,7 @@ type Plan = {
   price_twd: number;
   promotional_price_minor: number | null;
   currency: string;
+  monthly_credits?: number | null;
 };
 
 type PaymentRequest = {
@@ -48,6 +49,36 @@ const ACTIVE_REQUEST_STATUSES = [
   "contacted",
   "payment_pending",
 ];
+
+const PLAN_FEATURES = [
+  {
+    code: "free",
+    name: "Free",
+    monthlyCredits: "每月 20 點",
+    text: "每月 3 次",
+    image: "不支援",
+    video: "不支援",
+    socialAssets: "1 組",
+  },
+  {
+    code: "pro",
+    name: "Pro",
+    monthlyCredits: "每月 1,000 點",
+    text: "合理使用範圍內不限次數",
+    image: "不支援",
+    video: "不支援",
+    socialAssets: "3 組",
+  },
+  {
+    code: "business",
+    name: "Business",
+    monthlyCredits: "每月 2,500 點",
+    text: "合理使用範圍內不限次數",
+    image: "標準圖片｜合理使用範圍內不限次數",
+    video: "每月 30 次",
+    socialAssets: "10 組",
+  },
+] as const;
 
 function dateFormat(value: string) {
   return new Intl.DateTimeFormat("zh-TW", {
@@ -67,6 +98,26 @@ function statusLabel(status: string) {
   };
 
   return labels[status] || status;
+}
+
+function subscriptionStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    active: "使用中",
+    suspended: "已暫停",
+    cancelled: "已取消",
+    expired: "已到期",
+  };
+
+  return labels[status] || status;
+}
+
+function creditLabel(
+  plan: Plan | undefined,
+  fallback: string,
+) {
+  return typeof plan?.monthly_credits === "number"
+    ? `每月 ${plan.monthly_credits.toLocaleString()} 點`
+    : fallback;
 }
 
 function hasActiveRequest(
@@ -319,7 +370,7 @@ export default function BillingPage() {
       <section className="dashboard-main billing-page">
         <header className="dashboard-header">
           <div>
-            <div className="eyebrow">BILLING</div>
+            <div className="eyebrow">方案與帳務</div>
             <h1>方案與帳務</h1>
             <p>{me.workspaces[0].name}</p>
           </div>
@@ -327,7 +378,7 @@ export default function BillingPage() {
 
         <section className="dashboard-panel vertical billing-current">
           <div>
-            <div className="eyebrow">CURRENT PLAN</div>
+            <div className="eyebrow">目前方案</div>
             <h2>{subscription.plan_name} 方案</h2>
             <p>
               目前週期： {dateFormat(subscription.cycle_start)}
@@ -338,12 +389,81 @@ export default function BillingPage() {
 
           <div className="subscription-status">
             <span className="status-dot" />
-            {subscription.status}
+            {subscriptionStatusLabel(subscription.status)}
           </div>
         </section>
 
         <section className="dashboard-panel vertical">
-          <div className="eyebrow">UPGRADE</div>
+          <div className="eyebrow">方案功能與內容</div>
+          <h2>每個方案可以使用什麼</h2>
+          <p>
+            以下標示各方案可使用的 AI 內容與社群資產綁定數量。
+          </p>
+
+          <div className="billing-feature-grid">
+            {PLAN_FEATURES.map((feature) => {
+              const sourcePlan = plans.find(
+                (plan) => plan.code === feature.code,
+              );
+              const current = feature.code === currentPlan;
+
+              return (
+                <article
+                  className={`billing-feature-card ${
+                    current ? "current" : ""
+                  }`}
+                  key={feature.code}
+                >
+                  <div className="billing-feature-card-header">
+                    <h3>{feature.name}</h3>
+                    {current ? (
+                      <span className="billing-feature-current">
+                        目前方案
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <dl className="billing-feature-list">
+                    <div className="billing-feature-row">
+                      <dt>AI 點數</dt>
+                      <dd>
+                        {creditLabel(
+                          sourcePlan,
+                          feature.monthlyCredits,
+                        )}
+                      </dd>
+                    </div>
+                    <div className="billing-feature-row">
+                      <dt>AI 文字內容</dt>
+                      <dd>{feature.text}</dd>
+                    </div>
+                    <div className="billing-feature-row">
+                      <dt>AI 圖片內容</dt>
+                      <dd>{feature.image}</dd>
+                    </div>
+                    <div className="billing-feature-row">
+                      <dt>AI 影片內容</dt>
+                      <dd>{feature.video}</dd>
+                    </div>
+                    <div className="billing-feature-row">
+                      <dt>社群資產綁定</dt>
+                      <dd>{feature.socialAssets}</dd>
+                    </div>
+                  </dl>
+                </article>
+              );
+            })}
+          </div>
+
+          <p className="billing-feature-note">
+            社群資產包含已連接的臉書粉絲專頁或 Instagram 帳號。
+            連接 Meta 後才能建立發布草稿；實際發布仍需人工核准，
+            不會因為連接帳號而自動發布。
+          </p>
+        </section>
+
+        <section className="dashboard-panel vertical">
+          <div className="eyebrow">方案選擇</div>
           <h2>選擇方案</h2>
           <p>選擇升級方案後提交申請，系統會立即開啟付款客服對話。</p>
 
@@ -427,7 +547,7 @@ export default function BillingPage() {
         </section>
 
         <section className="dashboard-panel vertical">
-          <div className="eyebrow">REQUEST HISTORY</div>
+          <div className="eyebrow">申請紀錄</div>
           <h2>申請紀錄</h2>
 
           {requests.length === 0 ? (
