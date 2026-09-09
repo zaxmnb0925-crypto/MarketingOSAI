@@ -529,9 +529,12 @@ export default function CreatePage() {
               AI 創作
             </a>
 
-            <span className="nav-item disabled">
+            <a
+              className="nav-item"
+              href="/publications/draft"
+            >
               發布排程
-            </span>
+            </a>
 
             <a
               className="nav-item"
