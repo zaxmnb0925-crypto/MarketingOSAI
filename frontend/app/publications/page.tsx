@@ -195,6 +195,102 @@ export default function PublicationsPage() {
     }
   }
 
+  async function postPublicationAction(
+    publicationId: string,
+    action: string,
+    body?: unknown,
+  ) {
+    if (!workspace) {
+      throw new Error("目前沒有可用的 Workspace。");
+    }
+
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(
+        workspace.id,
+      )}/publications/${encodeURIComponent(
+        publicationId,
+      )}/${action}`,
+      {
+        method: "POST",
+        ...(body === undefined
+          ? {}
+          : {
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            }),
+      },
+    );
+
+    const data = await response.json().catch(
+      () => null,
+    );
+
+    if (response.status === 401) {
+      router.replace("/login");
+      throw new Error("登入已逾時。");
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        getDetail(data, "正式發布流程未通過。"),
+      );
+    }
+
+    return data as Record<string, unknown>;
+  }
+
+  async function publishPublication(
+    publicationId: string,
+  ) {
+    if (!window.confirm(
+      "確認正式發布到 Facebook？這會對外發布內容。",
+    )) {
+      return;
+    }
+
+    setError("");
+    setNotice("");
+
+    try {
+      const activation = await postPublicationAction(
+        publicationId,
+        "publish-activation",
+      );
+
+      const confirmation =
+        await postPublicationAction(
+          publicationId,
+          "publish-confirmation",
+        );
+
+      const result = await postPublicationAction(
+        publicationId,
+        "publish",
+        {
+          activation: activation.activation,
+          confirmation: confirmation.confirmation,
+          content_hash: confirmation.content_hash,
+        },
+      );
+
+      setNotice(
+        result.status === "published"
+          ? "已正式發布到 Facebook。"
+          : "發布請求已送出，請重新整理確認狀態。",
+      );
+
+      await loadPage();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "正式發布流程未通過。",
+      );
+    }
+  }
+
   async function runDryRun(
     publicationId: string,
   ) {
@@ -380,6 +476,17 @@ export default function PublicationsPage() {
                       }
                     >
                       發布前檢查
+                    </button>
+                  ) : null}
+                  {publication.status === "approved" ? (
+                    <button
+                      className="dashboard-primary-action"
+                      type="button"
+                      onClick={() =>
+                        void publishPublication(publication.id)
+                      }
+                    >
+                      正式發布
                     </button>
                   ) : null}
                 </article>
