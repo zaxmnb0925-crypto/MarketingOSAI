@@ -760,7 +760,7 @@ async def update_content_generation(
         )
 
     generation.generated_content = content
-    generation.status = ContentStatus.draft
+    generation.status = ContentStatus.completed
 
     await db.commit()
     await db.refresh(generation)
