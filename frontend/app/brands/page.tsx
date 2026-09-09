@@ -234,9 +234,10 @@ export default function BrandsPage() {
             "Content-Type":
               "application/json",
           },
-          body: JSON.stringify(
-            form,
-          ),
+          body: JSON.stringify({
+            ...form,
+            website: form.website.trim() || null,
+          }),
         });
 
       const data =
