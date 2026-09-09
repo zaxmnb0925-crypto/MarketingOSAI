@@ -72,6 +72,7 @@ export default function PublicationsPage() {
   const [publications, setPublications] = useState<Publication[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function loadPage() {
     setLoading(true);
@@ -194,6 +195,57 @@ export default function PublicationsPage() {
     }
   }
 
+  async function runDryRun(
+    publicationId: string,
+  ) {
+    if (!workspace) {
+      return;
+    }
+
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(
+        `/api/workspaces/${encodeURIComponent(
+          workspace.id,
+        )}/publications/${encodeURIComponent(
+          publicationId,
+        )}/dry-run`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json().catch(
+        () => null,
+      );
+
+      if (response.status === 401) {
+        router.replace("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          getDetail(data, "發布前檢查未通過。"),
+        );
+      }
+
+      setNotice(
+        `發布前檢查通過：${data.platform} · ` +
+        `內容 ${data.content_length} 字 · ` +
+        `SHA-256 ${data.content_hash}`,
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "發布前檢查未通過。",
+      );
+    }
+  }
+
   return (
     <main className="dashboard-shell">
       <aside className="dashboard-sidebar">
@@ -234,6 +286,9 @@ export default function PublicationsPage() {
 
         {error ? (
           <div className="dashboard-error">{error}</div>
+        ) : null}
+        {notice ? (
+          <div className="dashboard-success">{notice}</div>
         ) : null}
 
         <section className="dashboard-panel vertical">
@@ -314,6 +369,17 @@ export default function PublicationsPage() {
                       }
                     >
                       人工核准
+                    </button>
+                  ) : null}
+                  {publication.status === "approved" ? (
+                    <button
+                      className="dashboard-secondary-action"
+                      type="button"
+                      onClick={() =>
+                        void runDryRun(publication.id)
+                      }
+                    >
+                      發布前檢查
                     </button>
                   ) : null}
                 </article>
