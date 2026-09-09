@@ -140,6 +140,60 @@ export default function PublicationsPage() {
     router.replace("/login");
   }
 
+  async function approvePublication(
+    publicationId: string,
+  ) {
+    if (!workspace) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        "確認核准這份發布草稿？核准後仍需另外確認才會正式發布。",
+      )
+    ) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch(
+        `/api/workspaces/${encodeURIComponent(
+          workspace.id,
+        )}/publications/${encodeURIComponent(
+          publicationId,
+        )}/approve`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json().catch(
+        () => null,
+      );
+
+      if (response.status === 401) {
+        router.replace("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          getDetail(data, "目前無法核准發布草稿。"),
+        );
+      }
+
+      await loadPage();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "目前無法核准發布草稿。",
+      );
+    }
+  }
+
   return (
     <main className="dashboard-shell">
       <aside className="dashboard-sidebar">
@@ -250,6 +304,18 @@ export default function PublicationsPage() {
                   <div style={{ whiteSpace: "pre-wrap" }}>
                     {publication.content_snapshot}
                   </div>
+
+                  {publication.status === "draft" ? (
+                    <button
+                      className="dashboard-primary-action"
+                      type="button"
+                      onClick={() =>
+                        void approvePublication(publication.id)
+                      }
+                    >
+                      人工核准
+                    </button>
+                  ) : null}
                 </article>
               ))}
             </div>
