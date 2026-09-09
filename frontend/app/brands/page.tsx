@@ -151,6 +151,36 @@ export default function BrandsPage() {
     setMessage("");
   }
 
+  function applyLogisticsTemplate() {
+    setSelectedId(null);
+    setForm({
+      ...emptyForm,
+      name: "可樂星集運",
+      industry: "跨境集運／物流",
+      description:
+        "可樂星集運協助台灣消費者整理、合併從中國大陸購買的商品，提供到貨確認、包裹整併與寄送台灣服務，讓跨境購物更清楚、方便、安心。",
+      tone: "專業、親切、透明",
+      target_audience:
+        "台灣個人消費者、常在淘寶、拼多多及其他中國大陸電商平台購物，需要將多筆包裹集中寄回台灣的人。",
+      brand_voice:
+        "使用台灣繁體中文，語氣專業但不生硬、親切但不浮誇。先說重點，再清楚說明流程、費用、時效與可能限制。避免誇大承諾；遇到延誤或異常時，要誠實說明並提供下一步。",
+      value_proposition:
+        "把分散在中國大陸的多筆包裹集中管理，一次確認到貨、合併寄送台灣，減少追蹤與溝通成本，讓跨境購物更簡單。",
+      products_services:
+        "中國大陸包裹到貨確認、包裹合併、集運寄送台灣、物流狀態查詢與客服協助。",
+      keywords:
+        "跨境集運、包裹合併、淘寶集運、寄送台灣、到貨確認、費用透明",
+      forbidden_words:
+        "保證到貨、絕對最低價、百分之百不延誤",
+      default_cta: "立即查詢包裹",
+      brand_guidelines:
+        "使用台灣繁體中文；費用、流程與時效要清楚說明，不做無法證實的保證。",
+    });
+    setMessage(
+      "已套用集運範本，請確認內容後儲存。",
+    );
+  }
+
   function startEdit(
     brand: Brand,
   ) {
@@ -352,8 +382,8 @@ export default function BrandsPage() {
             </h1>
 
             <p className="brand-subtitle">
-              建立 Brand Brain，
-              讓 AI 了解每一個品牌。
+              先填基本資料，其餘內容可稍後補充；
+              儲存後 AI 會依照這些內容產生文案。
             </p>
           </div>
 
@@ -368,6 +398,14 @@ export default function BrandsPage() {
               }
             >
               Dashboard
+            </button>
+
+            <button
+              type="button"
+              className="secondary-button brand-template-button"
+              onClick={applyLogisticsTemplate}
+            >
+              套用集運範本
             </button>
 
             <button
@@ -432,7 +470,7 @@ export default function BrandsPage() {
             <div className="brand-editor-heading">
               <div>
                 <p className="brand-section-label">
-                  Brand Brain
+                  品牌資料庫
                 </p>
 
                 <h2>
@@ -461,6 +499,29 @@ export default function BrandsPage() {
               onSubmit={saveBrand}
             >
               <div className="brand-form-grid">
+                <div className="brand-form-intro brand-full">
+                  <span className="brand-form-intro-icon">
+                    ✦
+                  </span>
+                  <div>
+                    <strong>不用一次想完，先從基本資料開始</strong>
+                    <p>
+                      品牌名稱、產業、品牌介紹與目標客群填好後，
+                      AI 就能開始理解你的品牌。
+                    </p>
+                  </div>
+                </div>
+
+                <div className="brand-form-section brand-full">
+                  <span className="brand-form-section-number">
+                    01
+                  </span>
+                  <div>
+                    <strong>基本資料</strong>
+                    <p>先告訴 AI 你的品牌是誰，以及在哪裡提供服務。</p>
+                  </div>
+                </div>
+
                 <label>
                   品牌名稱 *
                   <input
@@ -586,6 +647,16 @@ export default function BrandsPage() {
                   />
                 </label>
 
+                <div className="brand-form-section brand-full">
+                  <span className="brand-form-section-number">
+                    02
+                  </span>
+                  <div>
+                    <strong>品牌定位</strong>
+                    <p>說明服務對象、品牌差異與希望客戶採取的行動。</p>
+                  </div>
+                </div>
+
                 <label className="brand-full">
                   目標客群
                   <textarea
@@ -601,8 +672,18 @@ export default function BrandsPage() {
                   />
                 </label>
 
+                <div className="brand-form-section brand-full">
+                  <span className="brand-form-section-number">
+                    03
+                  </span>
+                  <div>
+                    <strong>AI 寫作規則</strong>
+                    <p>告訴 AI 應該用什麼語氣，以及哪些事情不能亂說。</p>
+                  </div>
+                </div>
+
                 <label className="brand-full">
-                  Brand Voice
+                  AI 寫作語氣
                   <textarea
                     value={
                       form.brand_voice
@@ -645,6 +726,16 @@ export default function BrandsPage() {
                     }
                   />
                 </label>
+
+                <div className="brand-form-section brand-full">
+                  <span className="brand-form-section-number">
+                    04
+                  </span>
+                  <div>
+                    <strong>進階限制（可選）</strong>
+                    <p>關鍵字、禁止詞與品牌規範可之後慢慢補充。</p>
+                  </div>
+                </div>
 
                 <label className="brand-full">
                   品牌關鍵字
@@ -710,7 +801,7 @@ export default function BrandsPage() {
                   {saving
                     ? "儲存中…"
                     : selectedId
-                      ? "儲存 Brand Brain"
+                      ? "儲存品牌資料"
                       : "建立品牌"}
                 </button>
               </div>
