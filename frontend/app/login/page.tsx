@@ -16,6 +16,9 @@ export default function LoginPage() {
   const [password, setPassword] =
     useState("");
 
+  const [rememberMe, setRememberMe] =
+    useState(true);
+
   const [error, setError] =
     useState("");
 
@@ -42,6 +45,7 @@ export default function LoginPage() {
           body: JSON.stringify({
             email,
             password,
+            remember_me: rememberMe,
           }),
         },
       );
@@ -99,11 +103,14 @@ export default function LoginPage() {
 
         <form
           className="auth-form"
+          autoComplete="on"
           onSubmit={handleSubmit}
         >
           <label>
             Email
             <input
+              id="login-username"
+              name="username"
               type="email"
               value={email}
               onChange={(event) =>
@@ -111,7 +118,7 @@ export default function LoginPage() {
                   event.target.value,
                 )
               }
-              autoComplete="email"
+              autoComplete="username"
               required
             />
           </label>
@@ -119,6 +126,8 @@ export default function LoginPage() {
           <label>
             密碼
             <input
+              id="login-password"
+              name="password"
               type="password"
               value={password}
               onChange={(event) =>
@@ -130,6 +139,20 @@ export default function LoginPage() {
               required
             />
           </label>
+
+          <div className="auth-remember-row">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) =>
+                setRememberMe(event.target.checked)
+              }
+            />
+            <label htmlFor="remember-me">
+              記住登入狀態（30天）
+            </label>
+          </div>
 
           {error ? (
             <div className="auth-error">

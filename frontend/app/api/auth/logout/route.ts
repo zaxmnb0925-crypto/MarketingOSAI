@@ -2,16 +2,19 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { backendFetch } from "@/lib/backend";
+import {
+  REFRESH_TOKEN_COOKIE,
+  clearSessionCookies,
+} from "@/lib/auth-session";
 
 export async function POST() {
   const cookieStore = await cookies();
-
   const refreshToken = cookieStore.get(
-    "marketingos_refresh_token",
+    REFRESH_TOKEN_COOKIE,
   )?.value;
 
-  if (refreshToken) {
-    try {
+  try {
+    if (refreshToken) {
       await backendFetch(
         "/api/auth/logout",
         {
@@ -24,40 +27,15 @@ export async function POST() {
           }),
         },
       );
-    } catch {
-      // Cookies are still cleared locally.
     }
+  } catch {
+    // Always clear browser cookies even if the backend is unavailable.
   }
 
-  const response = NextResponse.json({
+  const result = NextResponse.json({
     ok: true,
   });
 
-  response.cookies.set(
-    "marketingos_access_token",
-    "",
-    {
-      httpOnly: true,
-      sameSite: "lax",
-      secure:
-        process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 0,
-    },
-  );
-
-  response.cookies.set(
-    "marketingos_refresh_token",
-    "",
-    {
-      httpOnly: true,
-      sameSite: "lax",
-      secure:
-        process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 0,
-    },
-  );
-
-  return response;
+  clearSessionCookies(result);
+  return result;
 }

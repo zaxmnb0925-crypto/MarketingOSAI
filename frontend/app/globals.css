@@ -3912,3 +3912,27 @@ a {
     text-align: left;
   }
 }
+
+
+.auth-form .auth-remember-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.auth-form .auth-remember-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: #6d5ce7;
+}
+
+.auth-form .auth-remember-row label {
+  display: inline;
+  margin: 0;
+  cursor: pointer;
+}
